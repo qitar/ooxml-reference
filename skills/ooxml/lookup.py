@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from prefix_map import PREFIX_MAP, prefix_to_ml
+from prefix_map import PREFIX_MAP, prefix_to_ml  # noqa: E402
 
 DB_PATH = Path(__file__).parent / "index.db"
 
@@ -24,6 +24,8 @@ PART_LABELS = {
     3: "ECMA-376 Part 3",
     4: "ECMA-376 Part 4",
 }
+
+ENTRY_SEP = "\n\n" + "─" * 72 + "\n\n"
 
 
 def open_db() -> sqlite3.Connection:
@@ -47,10 +49,50 @@ def escape_fts5(term: str) -> str:
     return '"' + term.replace('"', '""') + '"'
 
 
-def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
+def query_schema(
+    conn: sqlite3.Connection, local_name: str, ml_type: str | None
+) -> tuple[str | None, str | None]:
+    """
+    Return (parents_str, children_str) from the schema tables, or None for each
+    if no data is found. Silently returns (None, None) if the tables don't exist
+    (i.e. build_schema.py has not been run yet).
+    """
+    try:
+        if ml_type:
+            row_p = conn.execute(
+                "SELECT parents FROM schema_parents WHERE local_name=? AND ml_type=?",
+                (local_name, ml_type),
+            ).fetchone()
+            row_c = conn.execute(
+                "SELECT content_model FROM schema_children WHERE local_name=? AND ml_type=?",
+                (local_name, ml_type),
+            ).fetchone()
+        else:
+            row_p = conn.execute(
+                "SELECT parents FROM schema_parents WHERE local_name=?",
+                (local_name,),
+            ).fetchone()
+            row_c = conn.execute(
+                "SELECT content_model FROM schema_children WHERE local_name=?",
+                (local_name,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        # Tables don't exist — build_schema.py hasn't been run
+        return None, None
+    return (row_p[0] if row_p else None, row_c[0] if row_c else None)
+
+
+def format_result(
+    row: sqlite3.Row,
+    snippet: str | None = None,
+    parents: str | None = None,
+    children: str | None = None,
+    summary: bool = False,
+) -> str:
     """
     Produce the human-readable block for a single chunk row.
     snippet is only provided for stage-3 body matches where the body is long.
+    parents and children come from the schema tables built by build_schema.py.
     """
     section = row["section"] or ""
     local_name = row["local_name"] or ""
@@ -69,22 +111,48 @@ def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
                 namespace_uri = uri
 
     display_name = f"{prefix}:{local_name}" if prefix else local_name
-    section_ref = f" ({section})" if section else ""
     part_label = PART_LABELS.get(source_part, f"ECMA-376 Part {source_part}")
 
     lines = [
-        f"=== {display_name} — {title}{section_ref} [{ml_type}] ===",
+        f"=== {display_name} - {title} ===",
     ]
     if namespace_uri:
         lines.append(f"Namespace: {namespace_uri}")
-    lines.append(f"Source: {part_label}")
+
+    source_detail = ""
+    if section:
+        source_detail += f",  {section}"
+    if ml_type:
+        source_detail += f" ({ml_type})"
+    lines.append(f"Source: {part_label}{source_detail}")
     lines.append("")
 
-    if snippet is not None:
+    # The body often starts with a line repeating the section number and title;
+    # strip it since that info is already in the header.
+    body_text = body
+    if section and body_text.lstrip().startswith(section):
+        body_text = body_text.split("\n", 1)[-1] if "\n" in body_text else ""
+
+    if summary:
+        first_para = body_text.split("\n\n")[0].strip()
+        if first_para:
+            lines.append(first_para)
+    elif snippet is not None:
         lines.append("[Match found in body]")
         lines.append(snippet)
     else:
-        lines.append(body)
+        lines.append(body_text)
+
+    if not summary:
+        if parents:
+            lines.append("")
+            lines.append("Parents:")
+            lines.append(f"{parents}")
+        if children:
+            lines.append("")
+            lines.append("Children:")
+            for line in children.splitlines():
+                lines.append("  " + line)
 
     return "\n".join(lines)
 
@@ -219,29 +287,32 @@ def run_check() -> None:
     conn.close()
 
 
-def lookup(query: str, limit: int, part: int | None) -> None:
+def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> None:
     conn = open_db()
 
     # Parse optional namespace prefix
     ml_type: str | None = None
     local_name = query
-    has_prefix = False
-
     if ":" in query:
         prefix, _, rest = query.partition(":")
         # Only treat as a namespace prefix if it looks like one (no spaces, maps to something)
         if prefix and not re.search(r"\s", prefix):
-            has_prefix = True
             local_name = rest
             resolved_ml, _ = prefix_to_ml(prefix)
             # If prefix is unknown, ml_type stays None and we fall through on stage 1
             ml_type = resolved_ml
 
+    def fmt(row: sqlite3.Row, snippet: str | None = None) -> str:
+        if summary:
+            return format_result(row, snippet, summary=True)
+        parents, children = query_schema(conn, row["local_name"] or "", row["ml_type"])
+        return format_result(row, snippet, parents, children)
+
     # Stage 1 — exact local_name match
     rows = stage1_exact(conn, local_name, ml_type, limit, part)
 
     if rows:
-        print("\n".join(format_result(r) for r in rows))
+        print(ENTRY_SEP.join(fmt(r) for r in rows))
         conn.close()
         return
 
@@ -249,7 +320,7 @@ def lookup(query: str, limit: int, part: int | None) -> None:
     rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
 
     if rows:
-        print("\n".join(format_result(r) for r in rows))
+        print(ENTRY_SEP.join(fmt(r) for r in rows))
         conn.close()
         return
 
@@ -258,10 +329,8 @@ def lookup(query: str, limit: int, part: int | None) -> None:
     results = stage3_fts_body(conn, query, ml_type, limit, part)
 
     if results:
-        blocks = []
-        for row, snippet in results:
-            blocks.append(format_result(row, snippet))
-        print("\n\n".join(blocks))
+        blocks = [fmt(row, snippet) for row, snippet in results]
+        print(ENTRY_SEP.join(blocks))
         conn.close()
         return
 
@@ -293,6 +362,11 @@ def main() -> None:
         help="Restrict results to a specific ECMA-376 source part",
     )
     parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Show only the section title, namespace, and first paragraph",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Verify the index exists and print chunk counts per ml_type",
@@ -307,7 +381,7 @@ def main() -> None:
     if not args.query:
         parser.error("query is required unless --check is used")
 
-    lookup(args.query, args.limit, args.part)
+    lookup(args.query, args.limit, args.part, summary=args.summary)
 
 
 if __name__ == "__main__":
