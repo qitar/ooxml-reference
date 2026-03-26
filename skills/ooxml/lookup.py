@@ -1,0 +1,326 @@
+"""
+ECMA-376 OOXML reference lookup tool.
+
+Queries the FTS5 SQLite index built by build_index.py. Three-stage fallback:
+  1. Exact local_name match (with optional ml_type filter from namespace prefix)
+  2. FTS on local_name and title fields
+  3. Full-body FTS with snippet extraction
+"""
+
+import argparse
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from prefix_map import PREFIX_MAP, prefix_to_ml
+
+DB_PATH = Path(__file__).parent / "index.db"
+
+PART_LABELS = {
+    1: "ECMA-376 Part 1",
+    2: "ECMA-376 Part 2",
+    3: "ECMA-376 Part 3",
+    4: "ECMA-376 Part 4",
+}
+
+BODY_TRUNCATE_AT = 3000
+
+
+def open_db() -> sqlite3.Connection:
+    if not DB_PATH.exists():
+        print(
+            f"Error: index database not found at {DB_PATH}\n"
+            "Run build_index.py first to build the index."
+        )
+        sys.exit(1)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def escape_fts5(term: str) -> str:
+    """
+    Wrap term in double-quotes so FTS5 treats it as a phrase rather than
+    interpreting operators like AND/OR/NOT or special chars as syntax.
+    Internal double-quotes are doubled per the FTS5 spec.
+    """
+    return '"' + term.replace('"', '""') + '"'
+
+
+def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
+    """
+    Produce the human-readable block for a single chunk row.
+    snippet is only provided for stage-3 body matches where the body is long.
+    """
+    section = row["section"] or ""
+    local_name = row["local_name"] or ""
+    title = row["title"] or ""
+    ml_type = row["ml_type"] or ""
+    source_part = row["source_part"]
+    body = row["body"] or ""
+
+    # Build the prefix for this row's namespace
+    prefix = ""
+    namespace_uri = ""
+    for pfx, (ml, uri) in PREFIX_MAP.items():
+        if ml == ml_type:
+            # Use the first matching prefix
+            if not prefix:
+                prefix = pfx
+                namespace_uri = uri
+
+    display_name = f"{prefix}:{local_name}" if prefix else local_name
+    section_ref = f" (§{section})" if section else ""
+    part_label = PART_LABELS.get(source_part, f"ECMA-376 Part {source_part}")
+
+    lines = [
+        f"=== {display_name} — {title}{section_ref} [{ml_type}] ===",
+    ]
+    if namespace_uri:
+        lines.append(f"Namespace: {namespace_uri}")
+    lines.append(f"Source: {part_label}")
+    lines.append("")
+
+    if snippet is not None:
+        lines.append("[Match found in body]")
+        lines.append(snippet)
+    else:
+        if len(body) > BODY_TRUNCATE_AT:
+            lines.append(body[:BODY_TRUNCATE_AT])
+            lines.append(f"... [truncated, {len(body)} chars total]")
+        else:
+            lines.append(body)
+
+    return "\n".join(lines)
+
+
+def stage1_exact(
+    conn: sqlite3.Connection,
+    local_name: str,
+    ml_type: str | None,
+    limit: int,
+    part: int | None,
+) -> list[sqlite3.Row]:
+    conditions = ["local_name = ?"]
+    params: list = [local_name]
+
+    if ml_type:
+        conditions.append("ml_type = ?")
+        params.append(ml_type)
+    if part:
+        conditions.append("source_part = ?")
+        params.append(part)
+
+    order = "ORDER BY ml_type, section" if not ml_type else "ORDER BY section"
+    sql = f"SELECT * FROM chunks WHERE {' AND '.join(conditions)} {order} LIMIT ?"
+    params.append(limit)
+
+    return conn.execute(sql, params).fetchall()
+
+
+def stage2_fts_name_title(
+    conn: sqlite3.Connection,
+    term: str,
+    ml_type: str | None,
+    limit: int,
+    part: int | None,
+) -> list[sqlite3.Row]:
+    fts_query = f"local_name: {escape_fts5(term)} OR title: {escape_fts5(term)}"
+
+    # part filter must go in the outer WHERE since FTS columns don't include source_part
+    part_clause = "AND c.source_part = ?" if part else ""
+    ml_clause = "AND c.ml_type = ?" if ml_type else ""
+
+    sql = f"""
+        SELECT c.*
+        FROM chunks_fts
+        JOIN chunks c ON chunks_fts.rowid = c.id
+        WHERE chunks_fts MATCH ?
+        {ml_clause}
+        {part_clause}
+        ORDER BY rank
+        LIMIT ?
+    """
+    params: list = [fts_query]
+    if ml_type:
+        params.append(ml_type)
+    if part:
+        params.append(part)
+    params.append(limit)
+
+    try:
+        return conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        # FTS5 syntax error despite escaping — return empty and let caller fall through
+        return []
+
+
+def stage3_fts_body(
+    conn: sqlite3.Connection,
+    terms: str,
+    ml_type: str | None,
+    limit: int,
+    part: int | None,
+) -> list[tuple[sqlite3.Row, str]]:
+    """
+    Returns list of (row, snippet) tuples. snippet is extracted from body (column 2).
+    """
+    fts_query = terms  # raw terms; FTS5 handles natural language reasonably
+    ml_clause = "AND c.ml_type = ?" if ml_type else ""
+    part_clause = "AND c.source_part = ?" if part else ""
+
+    sql = f"""
+        SELECT c.*, snippet(chunks_fts, 2, '>>>', '<<<', '...', 32) AS body_snippet
+        FROM chunks_fts
+        JOIN chunks c ON chunks_fts.rowid = c.id
+        WHERE chunks_fts MATCH ?
+        {ml_clause}
+        {part_clause}
+        ORDER BY rank
+        LIMIT ?
+    """
+    params: list = [fts_query]
+    if ml_type:
+        params.append(ml_type)
+    if part:
+        params.append(part)
+    params.append(limit)
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        # Retry with fully-escaped phrase if raw terms caused a syntax error
+        escaped = escape_fts5(terms)
+        try:
+            params[0] = escaped
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    return [(row, row["body_snippet"]) for row in rows]
+
+
+def print_no_results(query: str, local_name: str) -> None:
+    print(f'No results found for "{query}".')
+    print("Suggestions:")
+    if ":" in query:
+        print(f'- Try without the namespace prefix: "{local_name}"')
+    print(f'- Try a descriptive phrase: "{local_name} properties"')
+    print("- Check that the index has been built: python skills/ooxml/lookup.py --check")
+
+
+def run_check() -> None:
+    conn = open_db()
+    rows = conn.execute(
+        "SELECT ml_type, COUNT(*) AS n FROM chunks GROUP BY ml_type ORDER BY ml_type"
+    ).fetchall()
+    total = sum(r["n"] for r in rows)
+    print(f"Index: {DB_PATH}")
+    print(f"Total chunks: {total}\n")
+    print(f"{'ML type':<30} {'Chunks':>8}")
+    print("-" * 40)
+    for row in rows:
+        print(f"{(row['ml_type'] or '(none)'):<30} {row['n']:>8}")
+    conn.close()
+
+
+def lookup(query: str, limit: int, part: int | None) -> None:
+    conn = open_db()
+
+    # Parse optional namespace prefix
+    ml_type: str | None = None
+    local_name = query
+    has_prefix = False
+
+    if ":" in query:
+        prefix, _, rest = query.partition(":")
+        # Only treat as a namespace prefix if it looks like one (no spaces, maps to something)
+        if prefix and not re.search(r"\s", prefix):
+            has_prefix = True
+            local_name = rest
+            resolved_ml, _ = prefix_to_ml(prefix)
+            # If prefix is unknown, ml_type stays None and we fall through on stage 1
+            ml_type = resolved_ml
+
+    # Stage 1 — exact local_name match
+    rows = stage1_exact(conn, local_name, ml_type, limit, part)
+
+    if rows:
+        print("\n".join(format_result(r) for r in rows))
+        conn.close()
+        return
+
+    # If we had an unrecognised prefix, don't pass ml_type to further stages
+    # (we already know it's None in that case, so nothing to change)
+
+    # Stage 2 — FTS on local_name and title
+    rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
+
+    if rows:
+        print("\n".join(format_result(r) for r in rows))
+        conn.close()
+        return
+
+    # Stage 3 — full body FTS with snippets
+    # Use the whole original query as the search terms for richer context
+    results = stage3_fts_body(conn, query, ml_type, limit, part)
+
+    if results:
+        blocks = []
+        for row, snippet in results:
+            # Only show snippet when body is too long to print in full
+            use_snippet = len(row["body"] or "") > BODY_TRUNCATE_AT
+            blocks.append(format_result(row, snippet if use_snippet else None))
+        print("\n\n".join(blocks))
+        conn.close()
+        return
+
+    print_no_results(query, local_name)
+    conn.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Look up ECMA-376 OOXML spec entries from the FTS index."
+    )
+    parser.add_argument(
+        "query",
+        nargs="?",
+        help="Search term, e.g. 'w:rPr', 'solidFill', 'bold text'",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Maximum number of results (default: 5)",
+    )
+    parser.add_argument(
+        "--part",
+        type=int,
+        choices=[1, 2, 3, 4],
+        default=None,
+        help="Restrict results to a specific ECMA-376 source part",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Verify the index exists and print chunk counts per ml_type",
+    )
+
+    args = parser.parse_args()
+
+    if args.check:
+        run_check()
+        return
+
+    if not args.query:
+        parser.error("query is required unless --check is used")
+
+    lookup(args.query, args.limit, args.part)
+
+
+if __name__ == "__main__":
+    main()
