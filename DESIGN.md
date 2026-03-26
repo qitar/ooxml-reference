@@ -3,20 +3,20 @@
 ## File layout
 
 ```
-source_docs/
-  *.pdf                    ← ECMA-376 source PDFs (input, not modified)
-  transitional-xsd/        ← OOXML XSD schema files (input, not modified)
-  strict-xsd/              ← Strict-conformance XSD (not used by default)
-skills/ooxml/
+skills/ooxml-reference/
   SKILL.md                 ← Claude Code skill definition
-  build_index.py           ← PDF extraction + FTS indexing script
-  build_schema.py          ← XSD parsing + schema parent/child indexing script
-  lookup.py                ← Query script invoked by the skill
-  index.db                 ← SQLite: FTS5 chunks + schema_parents + schema_children
-  prefix_map.py            ← Hardcoded prefix → chapter/ML mapping
+  pdfs/                    ← ECMA-376 5th Edition (2016) source PDFs
+  schemas/                 ← OOXML transitional XSD schema files
+  scripts/
+    lookup.py              ← Thin entry point invoked by the skill
+    query.py               ← Query logic (three-stage FTS fallback)
+    build_index.py         ← PDF extraction + FTS indexing script
+    build_schema.py        ← XSD parsing + schema parent/child indexing script
+    prefix_map.py          ← Hardcoded prefix → chapter/ML mapping
+    index.db               ← SQLite: FTS5 chunks + schema_parents + schema_children
 ```
 
-Two build scripts must be run to fully populate the index:
+Two build scripts must be run from `scripts/` to fully populate the index:
 1. `build_index.py` — extracts spec text from PDFs and creates the FTS index (requires `pdftotext`)
 2. `build_schema.py` — parses XSD files and populates schema parent/child tables (no extra deps)
 
@@ -100,7 +100,7 @@ FTS5 is used over FTS4 because it supports `rank` for relevance ordering, phrase
 
 ## Schema index
 
-`build_schema.py` parses XSD files from `source_docs/transitional-xsd/` and populates two
+`build_schema.py` parses XSD files from `schemas/` and populates two
 additional tables in `index.db`:
 
 ```sql
@@ -139,10 +139,10 @@ Children:
 
 ---
 
-## Query script (`lookup.py`)
+## Query script (`scripts/lookup.py`)
 
 ```
-python lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary]
+python scripts/lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary]
 ```
 
 **Query resolution:**

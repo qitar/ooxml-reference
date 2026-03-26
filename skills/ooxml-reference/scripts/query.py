@@ -13,8 +13,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from prefix_map import PREFIX_MAP, prefix_to_ml  # noqa: E402
+from prefix_map import PREFIX_MAP, prefix_to_ml
 
 DB_PATH = Path(__file__).parent / "index.db"
 
@@ -25,7 +24,7 @@ PART_LABELS = {
     4: "ECMA-376 Part 4",
 }
 
-ENTRY_SEP = "\n\n" + "─" * 72 + "\n\n"
+ENTRY_SEP = "\n\n" + "-" * 72 + "\n\n"
 
 
 def open_db() -> sqlite3.Connection:

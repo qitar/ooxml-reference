@@ -1,15 +1,15 @@
 """
 Build the schema parent/child index from ECMA-376 XSD files.
 
-Parses the transitional XSD set (whose namespace URIs match PREFIX_MAP in
-prefix_map.py) to extract element→children and element→parents relationships,
-then stores them in two tables in index.db.
+Parses the transitional XSD set from ../schemas/ (whose namespace URIs match
+PREFIX_MAP in prefix_map.py) to extract element→children and element→parents
+relationships, then stores them in two tables in index.db.
 
 The resulting tables are committed to the repo alongside index.db so that the
-skill works without the source XSD files at query time.
+skill works without the XSD files at query time.
 
 Usage:
-    python skills/ooxml/build_schema.py
+    python build_schema.py
 """
 
 import sqlite3
@@ -18,11 +18,10 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from prefix_map import PREFIX_MAP  # noqa: E402
+from prefix_map import PREFIX_MAP
 
 DB_PATH = Path(__file__).parent / "index.db"
-SOURCE_DIR = Path(__file__).parent.parent.parent / "source_docs"
+SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
 
 # Reverse map: ml_type → namespace prefix (first match wins)
 ML_TO_PREFIX: dict[str, str] = {}
@@ -301,11 +300,8 @@ def collect_element_names(
 
 
 def main() -> None:
-    # Uses the transitional XSD set — its namespace URIs match PREFIX_MAP,
-    # and the transitional schema is a superset of strict.
-    xsd_dir = SOURCE_DIR / "transitional-xsd"
-    if not xsd_dir.exists():
-        print(f"Error: XSD directory not found: {xsd_dir}", file=sys.stderr)
+    if not SCHEMA_DIR.exists():
+        print(f"Error: schema directory not found: {SCHEMA_DIR}", file=sys.stderr)
         sys.exit(1)
 
     if not DB_PATH.exists():
@@ -321,8 +317,8 @@ def main() -> None:
     type_registry: dict = {}   # (ct_name, ml_type) → content model node
     group_registry: dict = {}  # (group_name, ml_type) → content model node
 
-    xsd_files = sorted(xsd_dir.glob("*.xsd"))
-    print(f"Parsing {len(xsd_files)} XSD files from {xsd_dir.name}/...")
+    xsd_files = sorted(SCHEMA_DIR.glob("*.xsd"))
+    print(f"Parsing {len(xsd_files)} XSD files from {SCHEMA_DIR.name}/...")
 
     for xsd_path in xsd_files:
         ml_type = file_to_ml(xsd_path.name)

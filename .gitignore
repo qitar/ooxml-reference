@@ -1,2 +1,4 @@
 # Temporary PDF extraction files
-skills/ooxml/tmp/
+skills/ooxml-reference/scripts/tmp/
+
+__pycache__/

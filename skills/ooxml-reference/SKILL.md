@@ -1,4 +1,4 @@
-# OOXML Spec Lookup Skill
+# OOXML Reference Lookup Skill
 
 ## When to use this skill
 
@@ -11,10 +11,12 @@ Use this skill whenever you need authoritative ECMA-376 spec information:
 
 ## Running the lookup script
 
+Determine the absolute path to this skill's directory (the directory containing this SKILL.md file), then invoke the lookup script relative to it:
+
 ```bash
-python skills/ooxml/lookup.py "<query>"
-python skills/ooxml/lookup.py "<query>" --limit 3
-python skills/ooxml/lookup.py "<query>" --summary   # header + first paragraph only
+python <skill_dir>/scripts/lookup.py "<query>"
+python <skill_dir>/scripts/lookup.py "<query>" --limit 3
+python <skill_dir>/scripts/lookup.py "<query>" --summary   # header + first paragraph only
 ```
 
 Query forms:
@@ -44,6 +46,20 @@ Namespace prefix → ML type mapping:
 
 Namespace prefixes in actual pptx/xlsx XML files are aliases defined per-file in `xmlns` declarations. They conventionally follow this mapping, but if you see an unusual prefix, check the `xmlns` declaration in the file to confirm the actual namespace URI, then use the conventional prefix for lookup.
 
+### How querying works
+
+The lookup script uses a three-stage fallback — each stage only runs if the previous one returned no results:
+
+1. **Exact name match.** Looks for an exact `local_name` in the index (with optional `ml_type` filter from the namespace prefix). This is the fast path for element/attribute lookups like `a:solidFill` or `rPr`.
+2. **FTS on name and title.** Full-text search scoped to the `local_name` and `title` fields. Catches partial matches and queries that correspond to a section title rather than an exact element name.
+3. **Full-body FTS.** Searches the entire spec body text and returns a short snippet around the match. This handles descriptive queries like `"bold text"` that don't match any element name or title.
+
+Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name — they will reach stage 3 automatically.
+
+## Included source documents
+
+The ECMA-376 5th Edition (2016) specification PDFs and transitional XSD schema files are included in this skill under `pdfs/` and `schemas/` respectively. If the lookup index does not contain enough detail for your task, you may read the PDF or XSD files directly for additional context.
+
 ## Interpreting results
 
 Each result block has this structure:
@@ -63,7 +79,7 @@ Children:
     ...
 ```
 
-When multiple results are returned, entries are separated by a horizontal rule (`───`).
+When multiple results are returned, entries are separated by a horizontal rule (`---`).
 
 Key fields:
 - The header gives the qualified name and human title. Section reference and ML type are on the Source line.
@@ -78,4 +94,4 @@ Key fields:
 
 **Prefer Part 1 results.** Part 4 contains transitional/legacy elements from the original OOXML spec. For current pptx/xlsx work, prefer `Source: ECMA-376 Part 1` results. Use `--part 1` to filter explicitly if Part 4 entries are appearing.
 
-**Missing index.** If the index has not been built yet, the script will exit with an error. If the index is missing, it must be built with `python skills/ooxml/build_index.py` (requires the ECMA-376 PDF source files — ask the user). After building the main index, also run `python skills/ooxml/build_schema.py` to populate the Parents/Children schema sections in results (requires only the XSD files in `source_docs/transitional-xsd/`, which are already present).
+**Missing index.** If the index has not been built yet, the script will exit with an error. To build it, `cd` into the `scripts/` directory and run `python build_index.py` (requires the PDFs in `pdfs/` and `pdftotext` from poppler), then `python build_schema.py` to populate the Parents/Children schema data.

@@ -4,7 +4,7 @@ Build the OOXML spec index from ECMA-376 PDFs.
 The result is written to index.db (sqlite).
 
 Usage:
-    python skills/ooxml/build_index.py [--part 1|2|3|4]
+    python build_index.py [--part 1|2|3|4]
 
     --part N   Only index part N (useful for testing)
 """
@@ -19,8 +19,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from prefix_map import chapter_to_ml  # noqa: E402
+from prefix_map import chapter_to_ml
 
 PDFS = {
     1: "ECMA-376 OOXML (1) Fundamentals And Markup Language Reference.pdf",
@@ -30,7 +29,7 @@ PDFS = {
 }
 PDF_PAGE_COUNTS = {1: 5039, 2: 95, 3: 43, 4: 1553}
 
-SOURCE_DIR = Path(__file__).parent.parent.parent / "source_docs"
+PDF_DIR = Path(__file__).parent.parent / "pdfs"
 DB_PATH = Path(__file__).parent / "index.db"
 TMP_DIR = Path(__file__).parent / "tmp"
 
@@ -268,7 +267,7 @@ def main():
     all_chunks = []
 
     for i, part in enumerate(parts_to_index, 1):
-        pdf_path = SOURCE_DIR / PDFS[part]
+        pdf_path = PDF_DIR / PDFS[part]
         txt_path = TMP_DIR / f"part{part}.txt"
 
         print(f"[{i}/{total_parts}] ", end="")
