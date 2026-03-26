@@ -25,8 +25,6 @@ PART_LABELS = {
     4: "ECMA-376 Part 4",
 }
 
-BODY_TRUNCATE_AT = 3000
-
 
 def open_db() -> sqlite3.Connection:
     if not DB_PATH.exists():
@@ -61,7 +59,6 @@ def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
     source_part = row["source_part"]
     body = row["body"] or ""
 
-    # Build the prefix for this row's namespace
     prefix = ""
     namespace_uri = ""
     for pfx, (ml, uri) in PREFIX_MAP.items():
@@ -72,7 +69,7 @@ def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
                 namespace_uri = uri
 
     display_name = f"{prefix}:{local_name}" if prefix else local_name
-    section_ref = f" (§{section})" if section else ""
+    section_ref = f" ({section})" if section else ""
     part_label = PART_LABELS.get(source_part, f"ECMA-376 Part {source_part}")
 
     lines = [
@@ -87,11 +84,7 @@ def format_result(row: sqlite3.Row, snippet: str | None = None) -> str:
         lines.append("[Match found in body]")
         lines.append(snippet)
     else:
-        if len(body) > BODY_TRUNCATE_AT:
-            lines.append(body[:BODY_TRUNCATE_AT])
-            lines.append(f"... [truncated, {len(body)} chars total]")
-        else:
-            lines.append(body)
+        lines.append(body)
 
     return "\n".join(lines)
 
@@ -252,9 +245,6 @@ def lookup(query: str, limit: int, part: int | None) -> None:
         conn.close()
         return
 
-    # If we had an unrecognised prefix, don't pass ml_type to further stages
-    # (we already know it's None in that case, so nothing to change)
-
     # Stage 2 — FTS on local_name and title
     rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
 
@@ -270,9 +260,7 @@ def lookup(query: str, limit: int, part: int | None) -> None:
     if results:
         blocks = []
         for row, snippet in results:
-            # Only show snippet when body is too long to print in full
-            use_snippet = len(row["body"] or "") > BODY_TRUNCATE_AT
-            blocks.append(format_result(row, snippet if use_snippet else None))
+            blocks.append(format_result(row, snippet))
         print("\n\n".join(blocks))
         conn.close()
         return

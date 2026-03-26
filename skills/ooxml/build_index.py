@@ -86,10 +86,36 @@ def refine_prefix(section: str, default_prefix: str):
 
 
 def format_prefix(prefix_str):
-    """Ensure prefix has trailing colon, or return None."""
     if not prefix_str:
         return None
     return prefix_str if prefix_str.endswith(":") else f"{prefix_str}:"
+
+
+def strip_page_margins(text: str, header_lines: int = 2, footer_lines: int = 2) -> str:
+    """
+    Remove running page headers and footers from pdftotext -layout output.
+
+    pdftotext delimits pages with form-feed characters. Headers and footers
+    sit at fixed positions at the top and bottom of each page, so slicing
+    a fixed number of non-blank lines from each end reliably removes them
+    without brittle pattern matching.
+    """
+    pages = text.split("\f")
+    stripped = []
+    for page in pages:
+        page_lines = page.splitlines()
+        # Collect indices of non-blank lines so we skip blank padding
+        non_blank = [i for i, ln in enumerate(page_lines) if ln.strip()]
+        if len(non_blank) <= header_lines + footer_lines:
+            # Page has too few real lines to strip — keep as-is so we don't
+            # accidentally discard a real content page with a short section.
+            stripped.append(page)
+            continue
+        drop_top = set(non_blank[:header_lines])
+        drop_bot = set(non_blank[-footer_lines:])
+        kept = [ln for i, ln in enumerate(page_lines) if i not in drop_top and i not in drop_bot]
+        stripped.append("\n".join(kept))
+    return "\f".join(stripped)
 
 
 def parse_chunks(txt_path: Path, source_part: int):
@@ -99,6 +125,7 @@ def parse_chunks(txt_path: Path, source_part: int):
     Chunks that are TOC entries or too short are silently dropped.
     """
     text = txt_path.read_text(encoding="utf-8", errors="replace")
+    text = strip_page_margins(text)
     lines = text.splitlines()
 
     current_section = None

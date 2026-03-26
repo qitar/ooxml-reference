@@ -37,7 +37,10 @@ Namespace prefix → ML type mapping:
 | `c:` | DrawingML Charts | ch.21.2–21.3 |
 | `dgm:` | DrawingML Diagrams | ch.21.4 |
 | `r:` | Relationships | ch.22.8 |
+| `m:` | Math | ch.22.1 |
 | `mc:` | Markup Compatibility | Part 3 |
+| `wps:` | WordprocessingML Shapes | Word 2010 extension |
+| `wpg:` | WordprocessingML Group | Word 2010 extension |
 
 Namespace prefixes in actual pptx/xlsx XML files are aliases defined per-file in `xmlns` declarations. They conventionally follow this mapping, but if you see an unusual prefix, check the `xmlns` declaration in the file to confirm the actual namespace URI, then use the conventional prefix for lookup.
 
@@ -46,7 +49,7 @@ Namespace prefixes in actual pptx/xlsx XML files are aliases defined per-file in
 Each result block has this structure:
 
 ```
-=== a:rPr — Text Run Properties (§21.1.2.3.9) [DrawingML] ===
+=== a:rPr — Text Run Properties (21.1.2.3.9) [DrawingML] ===
 Namespace: http://schemas.openxmlformats.org/drawingml/2006/main
 Source: ECMA-376 Part 1
 
@@ -55,7 +58,7 @@ Source: ECMA-376 Part 1
 
 Key fields:
 - The header gives the qualified name, human title, section reference, and ML type.
-- The spec text contains the attributes table (columns may appear flattened due to PDF extraction), usage examples, and cross-references to related sections (e.g. `§20.1.10.40`).
+- The spec text contains the attributes table (columns may appear flattened due to PDF extraction), usage examples, and cross-references to related sections (e.g. `20.1.10.40`).
 - When a body is long, a `[Match found in body]` snippet is shown instead of the full text. If you need more detail, re-run with `--limit 1` targeting the specific element.
 
 ## Caveats

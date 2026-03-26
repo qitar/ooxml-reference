@@ -136,7 +136,7 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
 
 **Usage:**
 ```
-python lookup.py <query> [--prefix w:|a:|p:|x:|c:] [--limit 5]
+python lookup.py <query> [--limit 5] [--part 1|2|3|4] [--check]
 ```
 
 **Query resolution logic:**
@@ -158,7 +158,7 @@ python lookup.py <query> [--prefix w:|a:|p:|x:|c:] [--limit 5]
 **Output format (plain text, for Claude to read):**
 
 ```
-=== w:rPr — Run Properties (§17.3.2.27) [WordprocessingML] ===
+=== w:rPr — Run Properties (17.3.2.27) [WordprocessingML] ===
 
 This element specifies the set of properties applied to the region of text owned
 by the parent run. Each property is specified as a child element of this element.
@@ -232,12 +232,14 @@ Orchestrates the full pipeline:
    level chunking is simpler and sufficient for the primary use case.
 
 5. **Part 4 (Transitional)** — Contains many elements with the same names as Part 1 but
-   with legacy semantics. Tag these clearly as `source_part=4` and `transitional=true` so
+   with legacy semantics. These are tagged with `source_part=4` and `ml_type="Transitional"` so
    results distinguish them from the normative Part 1 entries.
 
 ---
 
 ## Implementation Order
+
+All steps completed in this order:
 
 1. `build_index.py` — extraction + chunking + indexing (validates the whole pipeline)
 2. Manual inspection of a sample of indexed chunks to verify quality
