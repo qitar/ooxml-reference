@@ -35,8 +35,9 @@ TMP_DIR = Path(__file__).parent / "tmp"
 
 # Matches lines like: "17.3.2.27    rPr (Run Properties)"
 # Group 1: section number, Group 2: local name, Group 3: title (optional)
+# Requires chapter >= 1 to avoid matching body-text decimals like "0.25 inches".
 HEADING_RE = re.compile(
-    r"^\s*(\d+(?:\.\d+)+)\s{2,}(\S.*?)(?:\s*\((.+?)\))?\s*$"
+    r"^\s*([1-9]\d*(?:\.\d+)+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
 )
 
 # TOC heading lines have dotted leaders followed by a page number at the end.
@@ -91,7 +92,7 @@ def format_prefix(prefix_str):
     return prefix_str if prefix_str.endswith(":") else f"{prefix_str}:"
 
 
-def strip_page_margins(text: str, header_lines: int = 2, footer_lines: int = 2) -> str:
+def strip_page_margins(text: str, header_lines: int = 1, footer_lines: int = 1) -> str:
     """
     Remove running page headers and footers from pdftotext -layout output.
 
