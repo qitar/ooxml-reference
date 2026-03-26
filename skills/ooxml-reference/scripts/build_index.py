@@ -72,24 +72,26 @@ def extract_pdf(pdf_path: Path, txt_path: Path, part: int):
     return True
 
 
-def refine_prefix(section: str, default_prefix: str | None):
+def refine_ml_and_prefix(
+    section: str, default_ml: str, default_prefix: str | None
+) -> tuple[str, str | None]:
     """
-    Chapter 21 covers multiple DrawingML sub-namespaces. Narrow the prefix
-    based on the subsection number rather than defaulting to a:.
+    Some chapters cover multiple sub-namespaces. Narrow both ml_type and prefix
+    based on the subsection number so they match PREFIX_MAP exactly.
     """
+    # Chapter 21: DrawingML sub-namespaces
     if section.startswith("21.2") or section.startswith("21.3"):
-        return "c:"
+        return "DrawingML Charts", "c:"
     if section.startswith("21.4"):
-        return "dgm:"
-    if default_prefix:
-        return f"{default_prefix}:"
-    return None
+        return "DrawingML Diagrams", "dgm:"
+    # Chapter 22: Shared sub-namespaces
+    if section.startswith("22.1"):
+        return "Math", "m:"
+    if section.startswith("22.8"):
+        return "Relationships", "r:"
 
-
-def format_prefix(prefix_str):
-    if not prefix_str:
-        return None
-    return prefix_str if prefix_str.endswith(":") else f"{prefix_str}:"
+    prefix = f"{default_prefix}:" if default_prefix else None
+    return default_ml, prefix
 
 
 def strip_page_margins(text: str, header_lines: int = 1, footer_lines: int = 1) -> str:
@@ -150,13 +152,15 @@ def parse_chunks(txt_path: Path, source_part: int):
         chapter = int(current_section.split(".")[0])
         ml_type, raw_prefix = chapter_to_ml(chapter, source_part)
 
-        # Resolve prefix to the canonical "prefix:" string
+        # Refine ml_type and prefix for chapters with sub-namespaces
         if source_part == 1:
-            prefixes = refine_prefix(current_section, raw_prefix)
+            ml_type, prefixes = refine_ml_and_prefix(
+                current_section, ml_type, raw_prefix
+            )
         elif source_part == 3:
             prefixes = "mc:"
         else:
-            prefixes = format_prefix(raw_prefix)
+            prefixes = f"{raw_prefix}:" if raw_prefix else None
 
         return {
             "section": current_section,

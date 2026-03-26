@@ -16,6 +16,7 @@ Determine the absolute path to this skill's directory (the directory containing 
 ```bash
 python <skill_dir>/scripts/lookup.py "<query>"
 python <skill_dir>/scripts/lookup.py "<query>" --limit 3
+python <skill_dir>/scripts/lookup.py "<query>" --part 1    # prefer Part 1 (normative) over Part 4 (transitional)
 python <skill_dir>/scripts/lookup.py "<query>" --summary   # header + first paragraph only
 ```
 
@@ -38,8 +39,8 @@ Namespace prefix → ML type mapping:
 | `a:` | DrawingML | ch.20 - 21 main |
 | `c:` | DrawingML Charts | ch.21.2 - 21.3 |
 | `dgm:` | DrawingML Diagrams | ch.21.4 |
-| `r:` | Relationships | ch.22.8 |
 | `m:` | Math | ch.22.1 |
+| `r:` | Relationships | ch.22.8 |
 | `mc:` | Markup Compatibility | Part 3 |
 | `wps:` | WordprocessingML Shapes | Word 2010 extension |
 | `wpg:` | WordprocessingML Group | Word 2010 extension |
@@ -55,6 +56,8 @@ The lookup script uses a three-stage fallback — each stage only runs if the pr
 3. **Full-body FTS.** Searches the entire spec body text and returns a short snippet around the match. This handles descriptive queries like `"bold text"` that don't match any element name or title.
 
 Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name — they will reach stage 3 automatically.
+
+Exit codes: 0 = results found, 1 = no results.
 
 ## Included source documents
 
@@ -92,6 +95,6 @@ Key fields:
 
 **Multiple results for the same local name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type on the `Source:` line to use the right spec entry for the file you are working with.
 
-**Prefer Part 1 results.** Part 4 contains transitional/legacy elements from the original OOXML spec. For current pptx/xlsx work, prefer `Source: ECMA-376 Part 1` results. Use `--part 1` to filter explicitly if Part 4 entries are appearing.
+**Prefer Part 1 results.** Part 4 contains transitional/legacy elements from the original OOXML spec. For current pptx/xlsx/docx work, always prefer `Source: ECMA-376 Part 1` results. If Part 4 entries are cluttering the output, add `--part 1` to filter them out.
 
 **Missing index.** If the index has not been built yet, the script will exit with an error. To build it, `cd` into the `scripts/` directory and run `python build_index.py` (requires the PDFs in `pdfs/` and `pdftotext` from poppler), then `python build_schema.py` to populate the Parents/Children schema data.

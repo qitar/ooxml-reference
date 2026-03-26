@@ -251,13 +251,7 @@ def stage3_fts_body(
     try:
         rows = conn.execute(sql, params).fetchall()
     except sqlite3.OperationalError:
-        # Retry with fully-escaped phrase if raw terms caused a syntax error
-        escaped = escape_fts5(terms)
-        try:
-            params[0] = escaped
-            rows = conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
-            return []
+        return []
 
     return [(row, row["body_snippet"]) for row in rows]
 
@@ -271,7 +265,8 @@ def print_no_results(query: str, local_name: str) -> None:
     print("- Check that the index has been built by verifying index.db exists")
 
 
-def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> None:
+def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> bool:
+    """Run the three-stage lookup and print results. Returns True if results were found."""
     conn = open_db()
 
     # Parse optional namespace prefix
@@ -292,34 +287,32 @@ def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> N
         parents, children = query_schema(conn, row["local_name"] or "", row["ml_type"])
         return format_result(row, snippet, parents, children)
 
-    # Stage 1 — exact local_name match
-    rows = stage1_exact(conn, local_name, ml_type, limit, part)
+    with conn:
+        # Stage 1 — exact local_name match
+        rows = stage1_exact(conn, local_name, ml_type, limit, part)
 
-    if rows:
-        print(ENTRY_SEP.join(fmt(r) for r in rows))
-        conn.close()
-        return
+        if rows:
+            print(ENTRY_SEP.join(fmt(r) for r in rows))
+            return True
 
-    # Stage 2 — FTS on local_name and title
-    rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
+        # Stage 2 — FTS on local_name and title
+        rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
 
-    if rows:
-        print(ENTRY_SEP.join(fmt(r) for r in rows))
-        conn.close()
-        return
+        if rows:
+            print(ENTRY_SEP.join(fmt(r) for r in rows))
+            return True
 
-    # Stage 3 — full body FTS with snippets
-    # Use the whole original query as the search terms for richer context
-    results = stage3_fts_body(conn, query, ml_type, limit, part)
+        # Stage 3 — full body FTS with snippets
+        # Escape upfront: stage 3 handles natural-language phrases, not FTS5 operators
+        results = stage3_fts_body(conn, escape_fts5(query), ml_type, limit, part)
 
-    if results:
-        blocks = [fmt(row, snippet) for row, snippet in results]
-        print(ENTRY_SEP.join(blocks))
-        conn.close()
-        return
+        if results:
+            blocks = [fmt(row, snippet) for row, snippet in results]
+            print(ENTRY_SEP.join(blocks))
+            return True
 
     print_no_results(query, local_name)
-    conn.close()
+    return False
 
 
 def main() -> None:
@@ -351,7 +344,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    lookup(args.query, args.limit, args.part, summary=args.summary)
+    found = lookup(args.query, args.limit, args.part, summary=args.summary)
+    if not found:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

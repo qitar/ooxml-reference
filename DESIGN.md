@@ -55,7 +55,7 @@ number) are skipped.
 | `section` | `17.3.2.27` | |
 | `local_name` | `rPr` | |
 | `title` | `Run Properties` | |
-| `ml_type` | `WordprocessingML` | derived from chapter number |
+| `ml_type` | `WordprocessingML` | derived from chapter number; refined by subsection for ch.21 and ch.22 sub-namespaces |
 | `prefixes` | `w:` | comma-separated for shared elements |
 | `source_part` | `1` | which PDF part |
 | `body` | *(full section text)* | used for FTS |
@@ -175,11 +175,6 @@ Parents: body, comment, tc, txBody, ...
 Children:
   sequence:
     ...
-
-Attributes:
-  rsidDel  — Revision Identifier for Run Deletion
-  rsidR    — Revision Identifier for Run
-  ...
 ```
 
 When multiple results are returned, entries are separated by a horizontal rule.
