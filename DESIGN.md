@@ -9,7 +9,7 @@ skills/ooxml-reference/
   schemas/                 ← OOXML transitional XSD schema files
   scripts/
     lookup.py              ← Thin entry point invoked by the skill
-    query.py               ← Query logic (three-stage FTS fallback)
+    query.py               ← Query logic (two-stage FTS fallback)
     build_index.py         ← PDF extraction + FTS indexing script
     build_schema.py        ← XSD parsing + schema parent/child indexing script
     prefix_map.py          ← Hardcoded prefix → chapter/ML mapping
@@ -158,8 +158,7 @@ python scripts/lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary]
 
 3. FTS cascade:
    - First: exact match on `local_name` (highest precision)
-   - Second: `local_name OR title` FTS match
-   - Third: full `body` FTS match (catches descriptive queries)
+   - Second: tokenized FTS (query split into words, implicit AND) with `bm25` column weights (10, 5, 1) so `local_name`/`title` hits rank above body-only hits
 
 **Output format:**
 ```

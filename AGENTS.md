@@ -12,7 +12,7 @@ and content models from the OOXML standard (used by `.pptx`, `.xlsx`, `.docx` fi
 |------|---------|
 | `skills/ooxml-reference/SKILL.md` | Skill definition read by the agent at invocation time |
 | `skills/ooxml-reference/scripts/lookup.py` | Entry point script invoked by the skill |
-| `skills/ooxml-reference/scripts/query.py` | Query logic: three-stage FTS fallback |
+| `skills/ooxml-reference/scripts/query.py` | Query logic: two-stage FTS fallback |
 | `skills/ooxml-reference/scripts/build_index.py` | Builds the FTS index from ECMA-376 PDFs |
 | `skills/ooxml-reference/scripts/build_schema.py` | Builds parent/child tables from XSD schemas |
 | `skills/ooxml-reference/scripts/prefix_map.py` | Canonical namespace prefix → ML type mapping |

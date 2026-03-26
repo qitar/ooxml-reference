@@ -1,10 +1,9 @@
 """
 ECMA-376 OOXML reference lookup tool.
 
-Queries the FTS5 SQLite index built by build_index.py. Three-stage fallback:
+Queries the FTS5 SQLite index built by build_index.py. Two-stage fallback:
   1. Exact local_name match (with optional ml_type filter from namespace prefix)
-  2. FTS on local_name and title fields
-  3. Full-body FTS with snippet extraction
+  2. Tokenized FTS with snippet extraction (implicit AND; bm25 weights prioritize local_name/title)
 """
 
 import argparse
@@ -41,11 +40,23 @@ def open_db() -> sqlite3.Connection:
 
 def escape_fts5(term: str) -> str:
     """
-    Wrap term in double-quotes so FTS5 treats it as a phrase rather than
+    Wrap term in double-quotes so FTS5 treats it as a literal rather than
     interpreting operators like AND/OR/NOT or special chars as syntax.
     Internal double-quotes are doubled per the FTS5 spec.
     """
     return '"' + term.replace('"', '""') + '"'
+
+
+def tokenize_fts5(query: str) -> str:
+    """
+    Split query into words and quote each one individually.
+    FTS5 implicit-ANDs space-separated terms, so this behaves like
+    a typical search engine: all terms must appear, in any order.
+    """
+    tokens = query.split()
+    if not tokens:
+        return '""'
+    return " ".join(escape_fts5(t) for t in tokens)
 
 
 def query_schema(
@@ -90,7 +101,7 @@ def format_result(
 ) -> str:
     """
     Produce the human-readable block for a single chunk row.
-    snippet is only provided for stage-3 body matches where the body is long.
+    snippet is only provided for stage-2 body matches where the body is long.
     parents and children come from the schema tables built by build_schema.py.
     """
     section = row["section"] or ""
@@ -180,44 +191,7 @@ def stage1_exact(
     return conn.execute(sql, params).fetchall()
 
 
-def stage2_fts_name_title(
-    conn: sqlite3.Connection,
-    term: str,
-    ml_type: str | None,
-    limit: int,
-    part: int | None,
-) -> list[sqlite3.Row]:
-    fts_query = f"local_name: {escape_fts5(term)} OR title: {escape_fts5(term)}"
-
-    # part filter must go in the outer WHERE since FTS columns don't include source_part
-    part_clause = "AND c.source_part = ?" if part else ""
-    ml_clause = "AND c.ml_type = ?" if ml_type else ""
-
-    sql = f"""
-        SELECT c.*
-        FROM chunks_fts
-        JOIN chunks c ON chunks_fts.rowid = c.id
-        WHERE chunks_fts MATCH ?
-        {ml_clause}
-        {part_clause}
-        ORDER BY rank
-        LIMIT ?
-    """
-    params: list = [fts_query]
-    if ml_type:
-        params.append(ml_type)
-    if part:
-        params.append(part)
-    params.append(limit)
-
-    try:
-        return conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        # FTS5 syntax error despite escaping — return empty and let caller fall through
-        return []
-
-
-def stage3_fts_body(
+def stage2_fts_body(
     conn: sqlite3.Connection,
     terms: str,
     ml_type: str | None,
@@ -225,9 +199,10 @@ def stage3_fts_body(
     part: int | None,
 ) -> list[tuple[sqlite3.Row, str]]:
     """
-    Returns list of (row, snippet) tuples. snippet is extracted from body (column 2).
+    Full-text search across all columns with snippet extraction from body (column 2).
+    bm25 weights (10, 5, 1) ensure matches on local_name or title rank above body-only hits.
     """
-    fts_query = terms  # raw terms; FTS5 handles natural language reasonably
+    fts_query = terms
     ml_clause = "AND c.ml_type = ?" if ml_type else ""
     part_clause = "AND c.source_part = ?" if part else ""
 
@@ -238,7 +213,7 @@ def stage3_fts_body(
         WHERE chunks_fts MATCH ?
         {ml_clause}
         {part_clause}
-        ORDER BY rank
+        ORDER BY bm25(chunks_fts, 10.0, 5.0, 1.0)
         LIMIT ?
     """
     params: list = [fts_query]
@@ -266,7 +241,7 @@ def print_no_results(query: str, local_name: str) -> None:
 
 
 def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> bool:
-    """Run the three-stage lookup and print results. Returns True if results were found."""
+    """Run the two-stage lookup and print results. Returns True if results were found."""
     conn = open_db()
 
     # Parse optional namespace prefix
@@ -295,16 +270,8 @@ def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> b
             print(ENTRY_SEP.join(fmt(r) for r in rows))
             return True
 
-        # Stage 2 — FTS on local_name and title
-        rows = stage2_fts_name_title(conn, local_name, ml_type, limit, part)
-
-        if rows:
-            print(ENTRY_SEP.join(fmt(r) for r in rows))
-            return True
-
-        # Stage 3 — full body FTS with snippets
-        # Escape upfront: stage 3 handles natural-language phrases, not FTS5 operators
-        results = stage3_fts_body(conn, escape_fts5(query), ml_type, limit, part)
+        # Stage 2 — full-text search with snippets (bm25 weights prioritize local_name/title)
+        results = stage2_fts_body(conn, tokenize_fts5(query), ml_type, limit, part)
 
         if results:
             blocks = [fmt(row, snippet) for row, snippet in results]

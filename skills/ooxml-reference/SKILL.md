@@ -27,7 +27,7 @@ Query forms:
 | `a:solidFill` | Looks up `solidFill` filtered to DrawingML |
 | `w:rPr` | Looks up `rPr` filtered to WordprocessingML |
 | `rPr` | Looks up `rPr` across all ML types |
-| `"bold text"` | Full-text phrase search |
+| `bold text` | Full-text search (all words must match, any order) |
 
 Namespace prefix → ML type mapping:
 
@@ -49,13 +49,12 @@ Namespace prefixes in actual pptx/xlsx XML files are aliases defined per-file in
 
 ### How querying works
 
-The lookup script uses a three-stage fallback — each stage only runs if the previous one returned no results:
+The lookup script uses a two-stage fallback — each stage only runs if the previous one returned no results:
 
 1. **Exact name match.** Looks for an exact `local_name` in the index (with optional `ml_type` filter from the namespace prefix). This is the fast path for element/attribute lookups like `a:solidFill` or `rPr`.
-2. **FTS on name and title.** Full-text search scoped to the `local_name` and `title` fields. Catches partial matches and queries that correspond to a section title rather than an exact element name.
-3. **Full-body FTS.** Searches the entire spec body text and returns a short snippet around the match. This handles descriptive queries like `"bold text"` that don't match any element name or title.
+2. **Full-text search.** Tokenizes the query into individual words (implicit AND, like a search engine) and searches across all columns (local_name, title, body). `bm25` column weights ensure matches on element names and titles rank above body-only hits, so descriptive queries like `bold text` still surface the most relevant entries first.
 
-Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name — they will reach stage 3 automatically.
+Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name — they will reach stage 2 automatically.
 
 Exit codes: 0 = results found, 1 = no results.
 
