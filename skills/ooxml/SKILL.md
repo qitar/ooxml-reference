@@ -15,7 +15,6 @@ Use this skill whenever you need authoritative ECMA-376 spec information:
 python skills/ooxml/lookup.py "<query>"
 python skills/ooxml/lookup.py "<query>" --limit 3
 python skills/ooxml/lookup.py "<query>" --summary   # header + first paragraph only
-python skills/ooxml/lookup.py --check               # verify index health
 ```
 
 Query forms:
@@ -25,7 +24,7 @@ Query forms:
 | `a:solidFill` | Looks up `solidFill` filtered to DrawingML |
 | `w:rPr` | Looks up `rPr` filtered to WordprocessingML |
 | `rPr` | Looks up `rPr` across all ML types |
-| `"bold text"` | Full-body FTS phrase search |
+| `"bold text"` | Full-text phrase search |
 
 Namespace prefix → ML type mapping:
 
@@ -34,8 +33,8 @@ Namespace prefix → ML type mapping:
 | `w:` | WordprocessingML | ch.17 |
 | `x:` | SpreadsheetML | ch.18 |
 | `p:` | PresentationML | ch.19 |
-| `a:` | DrawingML | ch.20–21 main |
-| `c:` | DrawingML Charts | ch.21.2–21.3 |
+| `a:` | DrawingML | ch.20 - 21 main |
+| `c:` | DrawingML Charts | ch.21.2 - 21.3 |
 | `dgm:` | DrawingML Diagrams | ch.21.4 |
 | `r:` | Relationships | ch.22.8 |
 | `m:` | Math | ch.22.1 |
@@ -79,4 +78,4 @@ Key fields:
 
 **Prefer Part 1 results.** Part 4 contains transitional/legacy elements from the original OOXML spec. For current pptx/xlsx work, prefer `Source: ECMA-376 Part 1` results. Use `--part 1` to filter explicitly if Part 4 entries are appearing.
 
-**Missing index.** If the index has not been built yet, the script will exit with an error. Run `python skills/ooxml/lookup.py --check` to confirm. If the index is missing, it must be built with `python skills/ooxml/build_index.py` (requires the ECMA-376 PDF source files — ask the user). After building the main index, also run `python skills/ooxml/build_schema.py` to populate the Parents/Children schema sections in results (requires only the XSD files in `source_docs/transitional-xsd/`, which are already present).
+**Missing index.** If the index has not been built yet, the script will exit with an error. If the index is missing, it must be built with `python skills/ooxml/build_index.py` (requires the ECMA-376 PDF source files — ask the user). After building the main index, also run `python skills/ooxml/build_schema.py` to populate the Parents/Children schema sections in results (requires only the XSD files in `source_docs/transitional-xsd/`, which are already present).

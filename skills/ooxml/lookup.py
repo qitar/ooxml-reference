@@ -269,22 +269,7 @@ def print_no_results(query: str, local_name: str) -> None:
     if ":" in query:
         print(f'- Try without the namespace prefix: "{local_name}"')
     print(f'- Try a descriptive phrase: "{local_name} properties"')
-    print("- Check that the index has been built: python skills/ooxml/lookup.py --check")
-
-
-def run_check() -> None:
-    conn = open_db()
-    rows = conn.execute(
-        "SELECT ml_type, COUNT(*) AS n FROM chunks GROUP BY ml_type ORDER BY ml_type"
-    ).fetchall()
-    total = sum(r["n"] for r in rows)
-    print(f"Index: {DB_PATH}")
-    print(f"Total chunks: {total}\n")
-    print(f"{'ML type':<30} {'Chunks':>8}")
-    print("-" * 40)
-    for row in rows:
-        print(f"{(row['ml_type'] or '(none)'):<30} {row['n']:>8}")
-    conn.close()
+    print("- Check that the index has been built by verifying index.db exists")
 
 
 def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> None:
@@ -344,7 +329,6 @@ def main() -> None:
     )
     parser.add_argument(
         "query",
-        nargs="?",
         help="Search term, e.g. 'w:rPr', 'solidFill', 'bold text'",
     )
     parser.add_argument(
@@ -366,20 +350,7 @@ def main() -> None:
         action="store_true",
         help="Show only the section title, namespace, and first paragraph",
     )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify the index exists and print chunk counts per ml_type",
-    )
-
     args = parser.parse_args()
-
-    if args.check:
-        run_check()
-        return
-
-    if not args.query:
-        parser.error("query is required unless --check is used")
 
     lookup(args.query, args.limit, args.part, summary=args.summary)
 

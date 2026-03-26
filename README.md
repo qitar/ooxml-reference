@@ -45,9 +45,9 @@ distinct elements with different attributes — prefix-aware routing is essentia
    ```bash
    python skills/ooxml/build_schema.py
    ```
-4. Verify:
+4. Verify the index exists:
    ```bash
-   python skills/ooxml/lookup.py --check
+   ls skills/ooxml/index.db
    ```
 
 The index is stored in `skills/ooxml/index.db` (not committed — regenerate locally).

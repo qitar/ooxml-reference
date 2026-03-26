@@ -142,7 +142,7 @@ Children:
 ## Query script (`lookup.py`)
 
 ```
-python lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary] [--check]
+python lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary]
 ```
 
 **Query resolution:**

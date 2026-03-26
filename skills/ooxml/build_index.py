@@ -1,10 +1,11 @@
 """
 Build the OOXML spec index from ECMA-376 PDFs.
 
-Usage:
-    python skills/ooxml/build_index.py [--force] [--part 1|2|3|4]
+The result is written to index.db (sqlite).
 
-    --force    Drop and rebuild index even if it already exists
+Usage:
+    python skills/ooxml/build_index.py [--part 1|2|3|4]
+
     --part N   Only index part N (useful for testing)
 """
 
@@ -19,7 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from prefix_map import chapter_to_ml
+from prefix_map import chapter_to_ml  # noqa: E402
 
 PDFS = {
     1: "ECMA-376 OOXML (1) Fundamentals And Markup Language Reference.pdf",
@@ -72,7 +73,7 @@ def extract_pdf(pdf_path: Path, txt_path: Path, part: int):
     return True
 
 
-def refine_prefix(section: str, default_prefix: str):
+def refine_prefix(section: str, default_prefix: str | None):
     """
     Chapter 21 covers multiple DrawingML sub-namespaces. Narrow the prefix
     based on the subsection number rather than defaulting to a:.
@@ -247,7 +248,6 @@ def print_summary(counts: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Build OOXML spec index")
-    parser.add_argument("--force", action="store_true", help="Drop and rebuild if DB exists")
     parser.add_argument("--part", type=int, choices=[1, 2, 3, 4], help="Only index this part")
     args = parser.parse_args()
 
@@ -255,12 +255,8 @@ def main():
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     if DB_PATH.exists():
-        if args.force:
-            DB_PATH.unlink()
-            print(f"Dropped existing index at {DB_PATH}")
-        else:
-            print(f"Index already exists at {DB_PATH}. Use --force to rebuild.")
-            sys.exit(0)
+        DB_PATH.unlink()
+        print(f"Dropped existing index at {DB_PATH}")
 
     parts_to_index = [args.part] if args.part else [1, 2, 3, 4]
     total_parts = len(parts_to_index)

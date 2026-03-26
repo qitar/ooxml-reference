@@ -1,16 +1,17 @@
 """
 Build the schema parent/child index from ECMA-376 XSD files.
 
-Parses XSD files to extract element→children and element→parents relationships,
-then stores them in two tables in index.db. The transitional XSD set is used by
-default because its namespace URIs match PREFIX_MAP in prefix_map.py.
+Parses the transitional XSD set (whose namespace URIs match PREFIX_MAP in
+prefix_map.py) to extract element→children and element→parents relationships,
+then stores them in two tables in index.db.
+
+The resulting tables are committed to the repo alongside index.db so that the
+skill works without the source XSD files at query time.
 
 Usage:
     python skills/ooxml/build_schema.py
-    python skills/ooxml/build_schema.py --xsd-dir strict
 """
 
-import argparse
 import sqlite3
 import sys
 import xml.etree.ElementTree as ET
@@ -300,18 +301,9 @@ def collect_element_names(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Build schema parent/child index from ECMA-376 XSD files."
-    )
-    parser.add_argument(
-        "--xsd-dir",
-        choices=["strict", "transitional"],
-        default="transitional",
-        help="Which XSD directory to parse (default: transitional)",
-    )
-    args = parser.parse_args()
-
-    xsd_dir = SOURCE_DIR / f"{args.xsd_dir}-xsd"
+    # Uses the transitional XSD set — its namespace URIs match PREFIX_MAP,
+    # and the transitional schema is a superset of strict.
+    xsd_dir = SOURCE_DIR / "transitional-xsd"
     if not xsd_dir.exists():
         print(f"Error: XSD directory not found: {xsd_dir}", file=sys.stderr)
         sys.exit(1)
