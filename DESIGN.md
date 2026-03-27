@@ -39,16 +39,23 @@ Examples:
 - `19.2.1.39    sldSz (Presentation Slide Size)`
 - `20.1.2.2.4   cNvCxnSpPr (Non-Visual Connector Shape Drawing Properties)`
 
-**Parsing:** regex `^\d+(\.\d+)+\s{2,}\S` detects section boundaries. Everything from that line
-to the next match is one chunk. Chunks that are pure TOC entries (no body text, just a page
-number) are skipped.
+**Parsing:** a regex matching `^[1-9]\d{0,2}(?:\.\d{1,3})+\s+...` detects section boundaries.
+Components are capped at 3 digits each so that body-text numbers like `1234.59`, `3.78624`,
+or `4503599627370497.5` (measurements, format examples) are not mistaken for headings. The
+chapter must start at 1 or above to reject decimals like `0.25 inches`. Everything from a
+matched heading line to the next match is one chunk. Chunks that are pure TOC entries (no
+body text, just a page number) are skipped.
+
+Chunks whose `section_to_ml` resolves to `"Unknown"` are also dropped. Unmapped chapters
+(e.g. chapter 1 intro, chapter 44 number-format appendix) never contain element definitions,
+so any heading match there is a false positive from body text.
 
 **Chunk fields stored in the DB:**
 
 | Field | Example | Notes |
 |-------|---------|-------|
 | `section` | `17.3.2.27` | |
-| `local_name` | `rPr` | |
+| `local_name` | `rPr` | NULL for section-level headings with no parenthesized name (e.g. `17.1 WordprocessingML`) |
 | `title` | `Run Properties` | |
 | `ml_type` | `WordprocessingML` | derived from section number via `CHAPTER_MAP` / `SUBSECTION_MAP` in `_prefix_map.py` |
 | `prefixes` | `w:` | comma-separated for shared elements |

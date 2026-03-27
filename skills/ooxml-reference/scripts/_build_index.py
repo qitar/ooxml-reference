@@ -28,10 +28,12 @@ PDF_DIR = Path(__file__).parent.parent / "pdfs"
 TMP_DIR = Path(__file__).parent / "tmp"
 
 # Matches lines like: "17.3.2.27    rPr (Run Properties)"
-# Group 1: section number, Group 2: local name, Group 3: title (optional)
+# Group 1: section number, Group 2: heading text, Group 3: parenthesized title (optional)
 # Requires chapter >= 1 to avoid matching body-text decimals like "0.25 inches".
+# Components are capped at 3 digits each to reject numbers like "1234.59" or "3.78624"
+# that appear in body text (e.g. measurements, format examples).
 HEADING_RE = re.compile(
-    r"^\s*([1-9]\d*(?:\.\d+)+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
+    r"^\s*([1-9]\d{0,2}(?:\.\d{1,3})+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
 )
 
 # TOC heading lines have dotted leaders followed by a page number at the end.
@@ -116,6 +118,12 @@ def parse_chunks(txt_path: Path, source_part: int):
             return None
 
         ml_type, prefix = section_to_ml(current_section, source_part)
+
+        # Unmapped chapters produce "Unknown" and are always false-positive
+        # heading matches from body text (e.g. "1.5 inches", "44.398 ml").
+        if ml_type == "Unknown":
+            return None
+
         prefixes = f"{prefix}:" if prefix else None
 
         return {
@@ -136,10 +144,15 @@ def parse_chunks(txt_path: Path, source_part: int):
                 yield chunk
 
             current_section = m.group(1)
-            # The local name may be followed by the title in parens on the same line;
-            # group(2) is everything between the section number and the optional paren group.
-            current_local_name = m.group(2).strip()
-            current_title = m.group(3).strip() if m.group(3) else None
+            # group(2) is an element name only when group(3) supplies a
+            # parenthesized title.  Otherwise group(2) is the section name
+            # itself (e.g. "WordprocessingML") and belongs in title.
+            if m.group(3):
+                current_local_name = m.group(2).strip()
+                current_title = m.group(3).strip()
+            else:
+                current_local_name = None
+                current_title = m.group(2).strip()
             # The heading line itself is part of the body so context is self-contained
             body_lines = [line]
         elif current_section is not None:

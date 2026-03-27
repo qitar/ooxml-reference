@@ -120,12 +120,19 @@ def format_result(
                 prefix = pfx
                 namespace_uri = uri
 
-    display_name = f"{prefix}:{local_name}" if prefix else local_name
     part_label = PART_LABELS.get(source_part, f"ECMA-376 Part {source_part}")
+
+    heading = ""
+    if prefix and local_name:
+        heading = f"{prefix}:{local_name} - "
+    elif local_name:
+        heading = f"{local_name} - "
+
+    heading += f"{title} ({ml_type})"
 
     lines = [
         "=" * 72,
-        f"{display_name} - {title} ({ml_type})",
+        heading,
         "=" * 72,
     ]
 
