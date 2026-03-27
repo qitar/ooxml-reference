@@ -12,7 +12,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from _prefix_map import PREFIX_MAP, prefix_to_ml
+from _prefix_map import PREFIX_MAP
 
 DB_PATH = Path(__file__).parent / "index.db"
 
@@ -252,9 +252,7 @@ def lookup(query: str, limit: int, part: int | None, summary: bool = False) -> b
         # Only treat as a namespace prefix if it looks like one (no spaces, maps to something)
         if prefix and not re.search(r"\s", prefix):
             local_name = rest
-            resolved_ml, _ = prefix_to_ml(prefix)
-            # If prefix is unknown, ml_type stays None and we fall through on stage 1
-            ml_type = resolved_ml
+            ml_type, _ = PREFIX_MAP.get(prefix, (None, None))
 
     def fmt(row: sqlite3.Row, snippet: str | None = None) -> str:
         if summary:

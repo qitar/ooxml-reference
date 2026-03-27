@@ -37,14 +37,6 @@ for _pfx, (_ml, _uri) in PREFIX_MAP.items():
     URI_TO_ML.setdefault(_uri, _ml)
 
 
-def prefix_to_ml(prefix: str):
-    """Return (ml_type, namespace_uri) for a given prefix, or (None, None) if unknown."""
-    entry = PREFIX_MAP.get(prefix)
-    if entry:
-        return entry
-    return (None, None)
-
-
 # Maps top-level chapter number → (ml_type, prefix) for Part 1.
 # Parts 2-4 are handled directly in section_to_ml.
 CHAPTER_MAP = {
