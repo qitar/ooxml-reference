@@ -14,6 +14,46 @@ PREFIX_MAP = {
     "wpg": ("WordprocessingML Group",  "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"),
 }
 
+
+# Derived maps for quick lookups by ml_type or namespace URI.
+# ml_type → prefix (first match wins)
+ML_TO_PREFIX: dict[str, str] = {}
+for _pfx, (_ml, _uri) in PREFIX_MAP.items():
+    if _ml not in ML_TO_PREFIX:
+        ML_TO_PREFIX[_ml] = _pfx
+
+# namespace URI → prefix
+URI_TO_PREFIX: dict[str, str] = {}
+for _pfx, (_ml, _uri) in PREFIX_MAP.items():
+    URI_TO_PREFIX.setdefault(_uri, _pfx)
+
+# namespace URI → ml_type
+URI_TO_ML: dict[str, str] = {}
+for _pfx, (_ml, _uri) in PREFIX_MAP.items():
+    URI_TO_ML.setdefault(_uri, _ml)
+
+# DrawingML sub-namespaces share the "a" display prefix and "DrawingML" ml_type.
+# Their targetNamespace URIs differ from dml-main.xsd, so we add explicit entries.
+dml_dub_ns = [
+    "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/lockedCanvas",
+    "http://schemas.openxmlformats.org/drawingml/2006/picture",
+]
+for _uri in dml_dub_ns:
+    URI_TO_PREFIX.setdefault(_uri, "a")
+    URI_TO_ML.setdefault(_uri, "DrawingML")
+
+
+def prefix_to_ml(prefix: str):
+    """Return (ml_type, namespace_uri) for a given prefix, or (None, None) if unknown."""
+    entry = PREFIX_MAP.get(prefix)
+    if entry:
+        return entry
+    return (None, None)
+
+
 # Maps top-level chapter number (int) → (ml_type, prefix)
 # For Part 1 only; Parts 2-4 get their own source_part tag.
 # Chapter 21 has subsections that use c: and dgm: — refined in _build_index.py.
@@ -43,14 +83,6 @@ CHAPTER_MAP = {
     22: ("Shared",           None),  # mixed namespaces; no single prefix
     23: ("Overview",         None),
 }
-
-
-def prefix_to_ml(prefix: str):
-    """Return (ml_type, namespace_uri) for a given prefix, or (None, None) if unknown."""
-    entry = PREFIX_MAP.get(prefix)
-    if entry:
-        return entry
-    return (None, None)
 
 
 def chapter_to_ml(chapter: int, source_part: int = 1):

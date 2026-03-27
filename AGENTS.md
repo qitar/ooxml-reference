@@ -16,7 +16,7 @@ and content models from the OOXML standard (used by `.pptx`, `.xlsx`, `.docx` fi
 | `skills/ooxml-reference/scripts/build.py` | Entry point to rebuild the full index |
 | `skills/ooxml-reference/scripts/_build_index.py` | Builds the FTS index from ECMA-376 PDFs |
 | `skills/ooxml-reference/scripts/_build_schema.py` | Builds parent/child tables from XSD schemas |
-| `skills/ooxml-reference/scripts/_prefix_map.py` | Canonical namespace prefix → ML type mapping |
+| `skills/ooxml-reference/scripts/_prefix_map.py` | Canonical namespace prefix/URI/ML-type mappings |
 | `skills/ooxml-reference/scripts/index.db` | SQLite database (FTS5 index + schema tables) |
 | `DESIGN.md` | Architecture and implementation details |
 
@@ -28,8 +28,7 @@ The `ml_type` values must be consistent across two places:
 2. **`_build_index.py`** — assigns ml_type when chunking PDFs (via `chapter_to_ml` + `refine_ml_and_prefix`)
 
 `_build_schema.py` derives its ml_type values from `PREFIX_MAP` via namespace URIs
-(`URI_TO_ML`), so it stays in sync automatically. DrawingML sub-namespace URIs
-(chartDrawing, picture, etc.) are mapped explicitly in `_DML_SUB_NS`.
+(`URI_TO_ML`), so it stays in sync automatically.
 
 If these diverge, prefixed lookups (e.g. `c:barChart`) silently return no results because
 the stage-1 exact match filters on ml_type.

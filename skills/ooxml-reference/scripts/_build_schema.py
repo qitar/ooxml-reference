@@ -10,37 +10,10 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 
-from _prefix_map import PREFIX_MAP
+from _prefix_map import ML_TO_PREFIX, URI_TO_ML, URI_TO_PREFIX
 
 DB_PATH = Path(__file__).parent / "index.db"
 SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
-
-# Reverse map: ml_type → namespace prefix (first match wins).
-# Used by prefixed_name() when rendering parent element names.
-ML_TO_PREFIX: dict[str, str] = {}
-for _pfx, (_ml, _uri) in PREFIX_MAP.items():
-    if _ml not in ML_TO_PREFIX:
-        ML_TO_PREFIX[_ml] = _pfx
-
-# Forward maps derived from PREFIX_MAP: namespace URI → display prefix / ml_type.
-URI_TO_PREFIX: dict[str, str] = {}
-URI_TO_ML: dict[str, str] = {}
-for _pfx, (_ml, _uri) in PREFIX_MAP.items():
-    URI_TO_PREFIX.setdefault(_uri, _pfx)
-    URI_TO_ML.setdefault(_uri, _ml)
-
-# DrawingML sub-namespaces share the "a" display prefix and "DrawingML" ml_type.
-# Their targetNamespace URIs differ from dml-main.xsd, so we add explicit entries.
-_DML_SUB_NS = [
-    "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
-    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
-    "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing",
-    "http://schemas.openxmlformats.org/drawingml/2006/lockedCanvas",
-    "http://schemas.openxmlformats.org/drawingml/2006/picture",
-]
-for _uri in _DML_SUB_NS:
-    URI_TO_PREFIX.setdefault(_uri, "a")
-    URI_TO_ML.setdefault(_uri, "DrawingML")
 
 
 def extract_ns_info(xsd_path: Path) -> tuple[str, dict[str, str]]:
