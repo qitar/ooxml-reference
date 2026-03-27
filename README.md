@@ -20,8 +20,7 @@ ECMA-376 5th Edition (2016).
 From the `skills/ooxml-reference/scripts/` directory:
 
 ```bash
-python build_index.py
-python build_schema.py
+python build.py
 ```
 
 The index is stored in `skills/ooxml-reference/scripts/index.db`.

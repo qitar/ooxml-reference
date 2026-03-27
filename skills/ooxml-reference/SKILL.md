@@ -51,10 +51,12 @@ Namespace prefixes in actual pptx/xlsx XML files are aliases defined per-file in
 
 The lookup script uses a two-stage fallback — each stage only runs if the previous one returned no results:
 
-1. **Exact name match.** Looks for an exact `local_name` in the index (with optional `ml_type` filter from the namespace prefix). This is the fast path for element/attribute lookups like `a:solidFill` or `rPr`.
-2. **Full-text search.** Tokenizes the query into individual words (implicit AND, like a search engine) and searches across all columns (local_name, title, body). `bm25` column weights ensure matches on element names and titles rank above body-only hits, so descriptive queries like `bold text` still surface the most relevant entries first.
+1. **Exact name match.** Matches the element name exactly (case-sensitive, ML type prefix is optional). This is the fast path for element lookups like `a:solidFill` or `rPr`.
+2. **Full-text keyword search.** Tokenizes the query into individual words (implicit AND) and searches across element names, titles, and spec text. Matches on names and titles rank higher.
 
-Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name — they will reach stage 2 automatically.
+Prefer prefixed element names (stage 1) for precise results. Use natural-language phrases when you don't know the element name.
+
+If your keywords do not yield results, try reducing the number of keywords.
 
 Exit codes: 0 = results found, 1 = no results.
 
@@ -92,8 +94,4 @@ Key fields:
 
 ## Caveats
 
-**Multiple results for the same local name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type on the `Source:` line to use the right spec entry for the file you are working with.
-
-**Prefer Part 1 results.** Part 4 contains transitional/legacy elements from the original OOXML spec. For current pptx/xlsx/docx work, always prefer `Source: ECMA-376 Part 1` results. If Part 4 entries are cluttering the output, add `--part 1` to filter them out.
-
-**Missing index.** If the index has not been built yet, the script will exit with an error. To build it, `cd` into the `scripts/` directory and run `python build_index.py` (requires the PDFs in `pdfs/` and `pdftotext` from poppler), then `python build_schema.py` to populate the Parents/Children schema data.
+**Multiple results for the same element name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type on the `Source:` line to use the right spec entry for the file you are working with.
