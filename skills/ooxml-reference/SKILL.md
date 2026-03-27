@@ -69,29 +69,32 @@ The ECMA-376 5th Edition (2016) specification PDFs and transitional XSD schema f
 Each result block has this structure:
 
 ```
-=== a:rPr - Text Run Properties ===
-Namespace: http://schemas.openxmlformats.org/drawingml/2006/main
-Source: ECMA-376 Part 1,  21.1.2.3.9 (DrawingML)
+========================================================================
+a:rPr - Text Run Properties (DrawingML)
+========================================================================
 
-<spec text: prose description, attributes table, XML examples, cross-references>
+This element contains all run level text properties for the text runs within a containing paragraph.
+... <spec text: prose description, attributes table, XML examples, cross-references>
 
-Parents:
+May appear within:
 spPr, grpSpPr, ln, ...
 
 Children:
   sequence:
     ...
+
+Namespace: http://schemas.openxmlformats.org/drawingml/2006/main
+Source: ECMA-376 Part 1, 21.1.2.3.9
 ```
 
-When multiple results are returned, entries are separated by a horizontal rule (`---`).
+When multiple results are returned, entries are separated by blank lines.
 
 Key fields:
-- The header gives the qualified name and human title. Section reference and ML type are on the Source line.
 - The spec text contains the attributes table (columns may appear flattened due to PDF extraction), usage examples, and cross-references to related sections (e.g. `20.1.10.40`).
 - When a body is long, a `[Match found in body]` snippet is shown instead of the full text. If you need more detail, re-run with `--limit 1` targeting the specific element.
-- **Parents** lists the element names that may contain this element, derived from the XSD schema.
-- **Children** shows the content model (sequence/choice structure with cardinalities) from the XSD schema. Cardinality is shown as `[min..max]`; absent means required exactly once. `*` means `unbounded`. `...` means the nesting was truncated at depth 8.
+- **May appear within:** lists the possible parent element names, derived from the XSD schema.
+- **Children:** shows the content model (sequence/choice structure with cardinalities) from the XSD schema. Cardinality is shown as `[min..max]`; absent means required exactly once. `*` means `unbounded`. `...` means the nesting was truncated at depth 8.
 
 ## Caveats
 
-**Multiple results for the same element name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type on the `Source:` line to use the right spec entry for the file you are working with.
+**Multiple entries for the same element name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type to make sure you are looking at the right spec entry.

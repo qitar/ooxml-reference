@@ -190,21 +190,26 @@ python scripts/lookup.py <query> [--limit N] [--part 1|2|3|4] [--summary]
 
 **Output format:**
 ```
-=== w:rPr - Run Properties ===
-Namespace: http://schemas.openxmlformats.org/wordprocessingml/2006/main
-Source: ECMA-376 Part 1,  17.3.2.27 (WordprocessingML)
+========================================================================
+w:rPr - Run Properties (WordprocessingML)
+========================================================================
 
 This element specifies the set of properties applied to the region of text owned
 by the parent run. Each property is specified as a child element of this element.
 ...
 
-Parents: body, comment, tc, txBody, ...
+Parents:
+body, comment, tc, txBody, ...
+
 Children:
   sequence:
     ...
+
+Namespace: http://schemas.openxmlformats.org/wordprocessingml/2006/main
+Source: ECMA-376 Part 1, 17.3.2.27
 ```
 
-When multiple results are returned, entries are separated by a horizontal rule.
+When multiple results are returned, entries are separated by blank lines.
 
 With `--summary`, only the header, namespace, and first paragraph are shown (no
 parents/children/attributes). Useful for quick identification when browsing many hits.

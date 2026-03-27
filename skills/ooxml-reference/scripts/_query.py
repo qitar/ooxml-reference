@@ -23,7 +23,7 @@ PART_LABELS = {
     4: "ECMA-376 Part 4",
 }
 
-ENTRY_SEP = "\n\n" + "-" * 72 + "\n\n"
+ENTRY_SEP = "\n\n\n\n"
 
 
 def open_db() -> sqlite3.Connection:
@@ -124,17 +124,11 @@ def format_result(
     part_label = PART_LABELS.get(source_part, f"ECMA-376 Part {source_part}")
 
     lines = [
-        f"=== {display_name} - {title} ===",
+        "=" * 72,
+        f"{display_name} - {title} ({ml_type})",
+        "=" * 72,
     ]
-    if namespace_uri:
-        lines.append(f"Namespace: {namespace_uri}")
 
-    source_detail = ""
-    if section:
-        source_detail += f",  {section}"
-    if ml_type:
-        source_detail += f" ({ml_type})"
-    lines.append(f"Source: {part_label}{source_detail}")
     lines.append("")
 
     # The body often starts with a line repeating the section number and title;
@@ -156,13 +150,23 @@ def format_result(
     if not summary:
         if parents:
             lines.append("")
-            lines.append("Parents:")
+            lines.append("May appear within:")
             lines.append(f"{parents}")
         if children:
             lines.append("")
             lines.append("Children:")
             for line in children.splitlines():
                 lines.append("  " + line)
+
+    lines.append("")
+
+    if namespace_uri:
+        lines.append(f"Namespace: {namespace_uri}")
+
+    source_line = f"Source: {part_label}"
+    if section:
+        source_line += f", {section}"
+    lines.append(source_line)
 
     return "\n".join(lines)
 
