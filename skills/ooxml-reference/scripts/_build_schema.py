@@ -4,6 +4,7 @@ Build the schema parent/child index from ECMA-376 XSD files.
 Writes to tables in index.db: schema_parents and schema_children.
 """
 
+import re
 import sqlite3
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -14,39 +15,47 @@ from _prefix_map import PREFIX_MAP
 DB_PATH = Path(__file__).parent / "index.db"
 SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
 
-# Reverse map: ml_type → namespace prefix (first match wins)
+# Reverse map: ml_type → namespace prefix (first match wins).
+# Used by prefixed_name() when rendering parent element names.
 ML_TO_PREFIX: dict[str, str] = {}
 for _pfx, (_ml, _uri) in PREFIX_MAP.items():
     if _ml not in ML_TO_PREFIX:
         ML_TO_PREFIX[_ml] = _pfx
 
-XSD_NS = "http://www.w3.org/2001/XMLSchema"
+# Forward maps derived from PREFIX_MAP: namespace URI → display prefix / ml_type.
+URI_TO_PREFIX: dict[str, str] = {}
+URI_TO_ML: dict[str, str] = {}
+for _pfx, (_ml, _uri) in PREFIX_MAP.items():
+    URI_TO_PREFIX.setdefault(_uri, _pfx)
+    URI_TO_ML.setdefault(_uri, _ml)
 
-# Maps XSD filename → ML type string matching the chunks table's ml_type column.
-XSD_ML = {
-    "wml.xsd": "WordprocessingML",
-    "pml.xsd": "PresentationML",
-    "sml.xsd": "SpreadsheetML",
-    "dml-main.xsd": "DrawingML",
-    "dml-chart.xsd": "DrawingML Charts",
-    "dml-diagram.xsd": "DrawingML Diagrams",
-    "dml-chartDrawing.xsd": "DrawingML",
-    "dml-lockedCanvas.xsd": "DrawingML",
-    "dml-picture.xsd": "DrawingML",
-    "dml-spreadsheetDrawing.xsd": "DrawingML",
-    "dml-wordprocessingDrawing.xsd": "DrawingML",
-    "shared-math.xsd": "Math",
-    "shared-relationshipReference.xsd": "Relationships",
-}
+# DrawingML sub-namespaces share the "a" display prefix and "DrawingML" ml_type.
+# Their targetNamespace URIs differ from dml-main.xsd, so we add explicit entries.
+_DML_SUB_NS = [
+    "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing",
+    "http://schemas.openxmlformats.org/drawingml/2006/lockedCanvas",
+    "http://schemas.openxmlformats.org/drawingml/2006/picture",
+]
+for _uri in _DML_SUB_NS:
+    URI_TO_PREFIX.setdefault(_uri, "a")
+    URI_TO_ML.setdefault(_uri, "DrawingML")
 
 
-def file_to_ml(filename: str) -> str:
-    ml = XSD_ML.get(filename)
-    if ml:
-        return ml
-    if filename.startswith("opc-"):
-        return "OpenPackagingConventions"
-    return "Shared"
+def extract_ns_info(xsd_path: Path) -> tuple[str, dict[str, str]]:
+    """
+    Extract targetNamespace and xmlns prefix→URI map from the XSD root element.
+    ElementTree strips xmlns declarations, so we use regex on the raw header.
+    """
+    header = xsd_path.read_text(encoding="utf-8")[:4096]
+    target_m = re.search(r'targetNamespace="([^"]+)"', header)
+    target_ns = target_m.group(1) if target_m else ""
+    ns_map = {
+        m.group(1): m.group(2)
+        for m in re.finditer(r'xmlns:(\w+)="([^"]+)"', header)
+    }
+    return target_ns, ns_map
 
 
 def local(tag: str) -> str:
@@ -60,7 +69,9 @@ def parse_occurs(elem) -> tuple[int, str]:
     return min_o, max_o
 
 
-def parse_node(elem) -> dict | None:
+def parse_node(
+    elem, ns_map: dict[str, str], target_ns: str
+) -> dict | None:
     """
     Recursively parse any XSD content model node into a plain dict tree.
     Returns None for non-structural nodes (xsd:attribute, xsd:annotation, etc.).
@@ -70,12 +81,24 @@ def parse_node(elem) -> dict | None:
 
     if tag == "element":
         name = elem.get("name")
-        if not name:
-            # ref="prefix:local" — strip prefix to get local name
-            ref = elem.get("ref", "")
-            name = ref.split(":")[-1] if ref else None
         if name:
-            return {"kind": "element", "name": name, "min": min_o, "max": max_o}
+            # Local declaration — belongs to this file's namespace
+            prefix = URI_TO_PREFIX.get(target_ns, "")
+        else:
+            # ref="prefix:local" — resolve prefix to canonical display prefix
+            ref = elem.get("ref", "")
+            if ":" in ref:
+                ref_pfx, name = ref.split(":", 1)
+                ref_uri = ns_map.get(ref_pfx, "")
+                prefix = URI_TO_PREFIX.get(ref_uri, ref_pfx)
+            else:
+                name = ref or None
+                prefix = URI_TO_PREFIX.get(target_ns, "")
+        if name:
+            return {
+                "kind": "element", "name": name, "prefix": prefix,
+                "min": min_o, "max": max_o,
+            }
 
     elif tag == "group":
         ref = elem.get("ref", "")
@@ -85,7 +108,7 @@ def parse_node(elem) -> dict | None:
             return {"kind": "group_ref", "name": gname, "min": min_o, "max": max_o}
 
     elif tag in ("sequence", "choice", "all"):
-        items = [parse_node(child) for child in elem]
+        items = [parse_node(child, ns_map, target_ns) for child in elem]
         items = [i for i in items if i is not None]
         return {"kind": tag, "min": min_o, "max": max_o, "items": items}
 
@@ -95,12 +118,14 @@ def parse_node(elem) -> dict | None:
     return None
 
 
-def parse_ct_model(ct_elem) -> dict | None:
+def parse_ct_model(
+    ct_elem, ns_map: dict[str, str], target_ns: str
+) -> dict | None:
     """Extract the content model node from a complexType element."""
     for child in ct_elem:
         tag = local(child.tag)
         if tag in ("sequence", "choice", "all"):
-            return parse_node(child)
+            return parse_node(child, ns_map, target_ns)
         elif tag == "complexContent":
             # Extension/restriction: look one level deeper for the compositor
             for cc_child in child:
@@ -109,16 +134,18 @@ def parse_ct_model(ct_elem) -> dict | None:
                     for ext_child in cc_child:
                         ext_tag = local(ext_child.tag)
                         if ext_tag in ("sequence", "choice", "all", "group"):
-                            return parse_node(ext_child)
+                            return parse_node(ext_child, ns_map, target_ns)
     return None
 
 
-def parse_group_model(group_elem) -> dict | None:
+def parse_group_model(
+    group_elem, ns_map: dict[str, str], target_ns: str
+) -> dict | None:
     """Extract the content model node from a group definition element."""
     for child in group_elem:
         tag = local(child.tag)
         if tag in ("sequence", "choice", "all"):
-            return parse_node(child)
+            return parse_node(child, ns_map, target_ns)
     return None
 
 
@@ -165,7 +192,6 @@ def collect_elem_decls(xml_elem, result: dict) -> None:
 
 def parse_xsd_file(
     xsd_path: Path,
-    ml_type: str,
     elem_registry: dict,
     type_registry: dict,
     group_registry: dict,
@@ -176,8 +202,10 @@ def parse_xsd_file(
       type_registry:  (ct_name, ml_type) → content model node
       group_registry: (group_name, ml_type) → content model node
     """
-    tree = ET.parse(xsd_path)
+    target_ns, ns_map = extract_ns_info(xsd_path)
+    ml_type = URI_TO_ML.get(target_ns, "Shared")
 
+    tree = ET.parse(xsd_path)
     root = tree.getroot()
 
     # Pass 1: collect CT and group content models from global definitions
@@ -186,13 +214,13 @@ def parse_xsd_file(
         if tag == "complexType":
             ct_name = child.get("name")
             if ct_name:
-                model = parse_ct_model(child)
+                model = parse_ct_model(child, ns_map, target_ns)
                 if model:
                     type_registry[(ct_name, ml_type)] = model
         elif tag == "group":
             gname = child.get("name")
             if gname:
-                model = parse_group_model(child)
+                model = parse_group_model(child, ns_map, target_ns)
                 if model:
                     group_registry[(gname, ml_type)] = model
 
@@ -216,7 +244,6 @@ def render_node(
     indent: int = 0,
     depth: int = 0,
     seen_groups: frozenset = frozenset(),
-    prefix_fn=None,
 ) -> str:
     """Render a content model node as indented human-readable text."""
     if depth > 8:
@@ -226,7 +253,8 @@ def render_node(
     kind = node["kind"]
 
     if kind == "element":
-        name = prefix_fn(node["name"]) if prefix_fn else node["name"]
+        pfx = node.get("prefix", "")
+        name = f"{pfx}:{node['name']}" if pfx else node["name"]
         occ = fmt_occurs(node["min"], node["max"])
         return f"{pad}{name}{occ}"
 
@@ -244,14 +272,14 @@ def render_node(
             return f"{pad}(group {gname}){occ}"
         # Merge the group ref's cardinality onto the inner compositor
         merged = dict(group_node, min=node["min"], max=node["max"])
-        return render_node(merged, all_groups, indent, depth + 1, seen_groups | {gname}, prefix_fn)
+        return render_node(merged, all_groups, indent, depth + 1, seen_groups | {gname})
 
     elif kind in ("sequence", "choice", "all"):
         occ = fmt_occurs(node["min"], node["max"])
         header = f"{pad}{kind}{occ}:"
         item_lines = []
         for item in node.get("items", []):
-            rendered = render_node(item, all_groups, indent + 1, depth + 1, seen_groups, prefix_fn)
+            rendered = render_node(item, all_groups, indent + 1, depth + 1, seen_groups)
             if rendered:
                 item_lines.append(rendered)
         if not item_lines:
@@ -294,7 +322,6 @@ def build_children_data(
     elem_registry: dict,
     type_registry: dict,
     all_groups: dict,
-    name_to_mls: dict[str, set[str]],
 ) -> dict:
     """For each element, render its content model as human-readable text."""
     children_data: dict = {}
@@ -302,7 +329,7 @@ def build_children_data(
         model = type_registry.get((ct_name, ml_type))
         if model is None:
             continue
-        rendered = render_node(model, all_groups, prefix_fn=make_prefix_fn(ml_type, name_to_mls))
+        rendered = render_node(model, all_groups)
         if rendered:
             children_data[(elem_name, ml_type)] = rendered
     return children_data
@@ -344,22 +371,6 @@ def build_parents_data(
     return parents_data
 
 
-def make_prefix_fn(default_ml: str, name_to_mls: dict[str, set[str]]):
-    """Return a function that prepends the namespace prefix to an element name."""
-    default_pfx = ML_TO_PREFIX.get(default_ml, "")
-
-    def prefix_fn(name: str) -> str:
-        mls = name_to_mls.get(name, set())
-        # Cross-namespace ref: element belongs to a different ML type
-        if mls and default_ml not in mls:
-            pfx = ML_TO_PREFIX.get(next(iter(mls)), "")
-        else:
-            pfx = default_pfx
-        return f"{pfx}:{name}" if pfx else name
-
-    return prefix_fn
-
-
 def init_db(path: Path):
     conn = sqlite3.connect(path)
 
@@ -397,8 +408,7 @@ def main() -> None:
     print(f"Parsing {len(xsd_files)} XSD files from {SCHEMA_DIR.name}/...")
 
     for xsd_path in xsd_files:
-        ml_type = file_to_ml(xsd_path.name)
-        parse_xsd_file(xsd_path, ml_type, elem_registry, type_registry, group_registry)
+        parse_xsd_file(xsd_path, elem_registry, type_registry, group_registry)
 
     print(f"  Elements:      {len(elem_registry)}")
     print(f"  Complex types: {len(type_registry)}")
@@ -408,14 +418,8 @@ def main() -> None:
     # collide across OOXML XSD files, so a flat dict keyed by name alone is safe.
     all_groups: dict = {gname: node for (gname, _), node in group_registry.items()}
 
-    # Reverse lookup: element name → set of ml_types it's registered in.
-    # Used to determine the correct namespace prefix for cross-namespace refs.
-    name_to_mls: dict[str, set[str]] = defaultdict(set)
-    for (name, mt) in elem_registry:
-        name_to_mls[name].add(mt)
-
     print("Building children data... ", end="", flush=True)
-    children_data = build_children_data(elem_registry, type_registry, all_groups, name_to_mls)
+    children_data = build_children_data(elem_registry, type_registry, all_groups)
     print("done")
 
     print("Building parent data... ", end="", flush=True)

@@ -22,11 +22,14 @@ and content models from the OOXML standard (used by `.pptx`, `.xlsx`, `.docx` fi
 
 ## Critical invariant
 
-The `ml_type` values must be consistent across three places:
+The `ml_type` values must be consistent across two places:
 
-1. **`_prefix_map.py`** — `PREFIX_MAP` maps prefixes to ml_type strings
+1. **`_prefix_map.py`** — `PREFIX_MAP` maps prefixes to (ml_type, namespace_uri) tuples
 2. **`_build_index.py`** — assigns ml_type when chunking PDFs (via `chapter_to_ml` + `refine_ml_and_prefix`)
-3. **`_build_schema.py`** — assigns ml_type when parsing XSD files (via `XSD_ML` dict)
+
+`_build_schema.py` derives its ml_type values from `PREFIX_MAP` via namespace URIs
+(`URI_TO_ML`), so it stays in sync automatically. DrawingML sub-namespace URIs
+(chartDrawing, picture, etc.) are mapped explicitly in `_DML_SUB_NS`.
 
 If these diverge, prefixed lookups (e.g. `c:barChart`) silently return no results because
 the stage-1 exact match filters on ml_type.
