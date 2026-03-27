@@ -89,7 +89,7 @@ Source: ECMA-376 Part 1, 21.1.2.3.9
 When multiple results are returned, entries are separated by blank lines.
 
 Key fields:
-- The spec text contains the attributes table (columns may appear flattened due to PDF extraction), usage examples, and cross-references to related sections (e.g. `20.1.10.40`).
+- The spec text contains the attributes table, usage examples, and cross-references to related sections (e.g. `20.1.10.40`).
 - When a body is long, a `[Match found in body]` snippet is shown instead of the full text. If you need more detail, re-run with `--limit 1` targeting the specific element.
 - **May appear within:** lists the possible parent element names, derived from the XSD schema.
 - **Children:** shows the content model (sequence/choice structure with cardinalities) from the XSD schema. Cardinality is shown as `[min..max]`; absent means required exactly once. `*` means `unbounded`. `...` means the nesting was truncated at depth 8.

@@ -42,6 +42,13 @@ SECTION_RE = re.compile(
     r"^\s*(\d+(?:\.\d+)+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
 )
 
+# PDF tables that span page breaks repeat the header row on each new page.
+# We keep only the first occurrence per chunk.
+TABLE_HEADER_RE = re.compile(r"^\s*Attributes\s{2,}Description\s*$")
+
+# Fixed character width for the attribute-name column in formatted output.
+ATTR_COL_WIDTH = 24
+
 
 def is_heading_span(span: dict) -> bool:
     """True when a span uses Cambria at heading size (>= 12pt)."""
@@ -55,10 +62,11 @@ def is_heading_block(block: dict) -> bool:
     section-number line uses a different style (Cambria-Bold 11pt black).
     Checking at block level catches these mixed-style headings.
     """
-    for line in block["lines"]:
-        if line["spans"] and is_heading_span(line["spans"][0]):
-            return True
-    return False
+    return any(
+        is_heading_span(line["spans"][0])
+        for line in block["lines"]
+        if line["spans"]
+    )
 
 
 def _spans_to_text(spans: list[dict]) -> str:
@@ -84,14 +92,46 @@ def _spans_to_text(spans: list[dict]) -> str:
     return "".join(parts)
 
 
-def merge_block_lines(blocks: list[dict]) -> list[str]:
-    """Merge lines across multiple pymupdf blocks, preserving column layout.
+# Sentinel value for table_col_x: header was found but the column boundary
+# hasn't been determined yet (waiting for the first body row).
+_SENTINEL = -1.0
+
+
+def _find_col_boundary(spans: list[dict]) -> float | None:
+    """Find the column boundary from the largest inter-span gap in a row.
+
+    Returns the midpoint of the widest gap, or None if no gap exceeds 20pt
+    (i.e. the row doesn't look like a two-column table row).
+    """
+    max_gap = 0.0
+    boundary = None
+    for prev, cur in zip(spans, spans[1:]):
+        gap = cur["bbox"][0] - prev["bbox"][2]
+        if gap > max_gap:
+            max_gap = gap
+            boundary = (prev["bbox"][2] + cur["bbox"][0]) / 2
+    if boundary is not None and max_gap > 20:
+        return boundary
+    return None
+
+
+def _format_table_row(spans: list[dict], col_x: float) -> str:
+    """Format a row of spans as a two-column table line."""
+    left = [s for s in spans if s["bbox"][0] < col_x]
+    right = [s for s in spans if s["bbox"][0] >= col_x]
+    left_text = _spans_to_text(left).strip() if left else ""
+    right_text = _spans_to_text(right).strip() if right else ""
+    return f"{left_text:<{ATTR_COL_WIDTH}}{right_text}"
+
+
+def _group_rows(blocks: list[dict]) -> list[list[dict]]:
+    """Collect all spans from blocks and group into rows by vertical position.
 
     PDF attribute tables often place the name cell and description cell in
     separate blocks that overlap vertically (same y-position, different x).
     pymupdf can also split side-by-side cells into separate "lines" within
     one block. We collect all lines from the given blocks, group them by
-    vertical position, then merge same-row spans with gap-aware spacing.
+    vertical position, then return each row as a list of pymupdf line dicts.
     """
     all_lines = []
     for block in blocks:
@@ -102,11 +142,11 @@ def merge_block_lines(blocks: list[dict]) -> list[str]:
     if not all_lines:
         return []
 
-    # Sort by vertical midpoint so lines from different blocks interleave correctly
-    all_lines.sort(key=lambda line: (line["bbox"][1] + line["bbox"][3]) / 2)
-
     def y_mid(line: dict) -> float:
         return (line["bbox"][1] + line["bbox"][3]) / 2
+
+    # Sort by vertical midpoint so lines from different blocks interleave correctly
+    all_lines.sort(key=y_mid)
 
     # Group lines whose vertical midpoints are within half a line-height
     rows: list[list[dict]] = []
@@ -120,20 +160,72 @@ def merge_block_lines(blocks: list[dict]) -> list[str]:
                 continue
         rows.append([line])
 
-    result = []
+    return rows
+
+
+def merge_block_lines(
+    blocks: list[dict], table_col_x: float | None = None
+) -> tuple[list[str], float | None]:
+    """Merge lines across multiple pymupdf blocks, preserving column layout.
+
+    When an attribute table is detected (via its "Attributes / Description"
+    header row), spans are split into left and right columns using the
+    header's x-coordinate as the boundary. This produces consistently
+    aligned output without gap-based guessing.
+
+    Returns (lines, table_col_x) so callers can carry table state across
+    page breaks within a single chunk.
+    """
+    rows = _group_rows(blocks)
+    if not rows:
+        return [], table_col_x
+
+    result: list[str] = []
     for row in rows:
-        all_spans = []
+        all_spans: list[dict] = []
         for line in row:
             all_spans.extend(line["spans"])
         all_spans.sort(key=lambda s: s["bbox"][0])
-        result.append(_spans_to_text(all_spans))
 
-    return result
+        if table_col_x is None:
+            text = _spans_to_text(all_spans)
+            if TABLE_HEADER_RE.match(text):
+                # Mark that we've seen the header; the actual column boundary
+                # will be determined from the first body row whose layout is
+                # more reliable than the header text placement.
+                table_col_x = _SENTINEL
+                result.append("")
+                result.append(f"{'Attributes':<{ATTR_COL_WIDTH}}Description")
+            else:
+                result.append(text)
 
+        elif table_col_x == _SENTINEL:
+            # First body row after the header: find the largest inter-span
+            # gap and use its midpoint as the column boundary.
+            table_col_x = _find_col_boundary(all_spans)
+            if table_col_x is not None:
+                result.append(_format_table_row(all_spans, table_col_x))
+            else:
+                # No clear two-column structure; not actually a table
+                result.append(_spans_to_text(all_spans))
 
-def line_text(line: dict) -> str:
-    """Join all span texts in a pymupdf line dict."""
-    return _spans_to_text(line["spans"])
+        else:
+            # Inside an attribute table: use the column boundary to split spans
+            text = _spans_to_text(all_spans)
+            if TABLE_HEADER_RE.match(text):
+                continue  # duplicate header at page break
+
+            formatted = _format_table_row(all_spans, table_col_x)
+            left_only = all(s["bbox"][0] < table_col_x for s in all_spans)
+
+            if left_only and len(text.strip()) > ATTR_COL_WIDTH:
+                # Full-width text after the table (e.g. "[Note: ..." paragraph)
+                table_col_x = None
+                result.append(text.strip())
+            else:
+                result.append(formatted)
+
+    return result, table_col_x
 
 
 def parse_chunks(pdf_path: Path, source_part: int):
@@ -149,10 +241,12 @@ def parse_chunks(pdf_path: Path, source_part: int):
     current_local_name = None
     current_title = None
     body_lines: list[str] = []
+    table_col_x: float | None = None
 
     def flush_chunk():
         if current_section is None:
             return None
+
         body = "\n".join(body_lines).strip()
 
         if len(body) < 50:
@@ -184,8 +278,12 @@ def parse_chunks(pdf_path: Path, source_part: int):
         pending_body_blocks: list[dict] = []
 
         def flush_body_blocks():
+            nonlocal table_col_x
             if pending_body_blocks:
-                body_lines.extend(merge_block_lines(pending_body_blocks))
+                lines, table_col_x = merge_block_lines(
+                    pending_body_blocks, table_col_x
+                )
+                body_lines.extend(lines)
                 pending_body_blocks.clear()
 
         for block in blocks:
@@ -200,7 +298,7 @@ def parse_chunks(pdf_path: Path, source_part: int):
                 flush_body_blocks()
 
                 heading_parts = [
-                    line_text(line).strip()
+                    _spans_to_text(line["spans"]).strip()
                     for line in block["lines"]
                     if line["spans"]
                 ]
@@ -211,6 +309,7 @@ def parse_chunks(pdf_path: Path, source_part: int):
                     if chunk:
                         yield chunk
 
+                    table_col_x = None
                     current_section = m.group(1)
                     if m.group(3):
                         current_local_name = m.group(2).strip()

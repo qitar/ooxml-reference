@@ -58,8 +58,24 @@ the same y-position. To preserve column layout, consecutive non-heading blocks o
 each page are batched and their lines are merged by vertical position: lines whose
 midpoints are within half a line-height are grouped into a single row. Within each
 row, spans are sorted by x-position and joined with proportional spacing when the
-horizontal gap exceeds ~3 character widths. This keeps attribute tables readable
-in the stored body text.
+horizontal gap exceeds ~3 character widths (`_spans_to_text`).
+
+**Attribute table formatting:** the "Attributes / Description" tables get special
+treatment. When `merge_block_lines` detects the header row (via `TABLE_HEADER_RE`),
+it enters a three-phase table mode:
+
+1. **Header:** emit a fixed-width header and set a sentinel value for `table_col_x`.
+2. **First body row:** find the largest inter-span gap (>20pt) and use its midpoint
+   as the column boundary. The header text position is unreliable for this because
+   "Description" can sit far to the right of where body descriptions actually start.
+3. **Subsequent rows:** split each row's spans into left/right by the boundary,
+   format each side with `_spans_to_text`, and pad the left column to a fixed
+   width (`ATTR_COL_WIDTH`). Rows with only left-column text shorter than
+   `ATTR_COL_WIDTH` are attribute-name continuations; rows with only long
+   left-column text signal the table has ended (e.g. the `[Note: ...` paragraph).
+
+`table_col_x` state is threaded through `flush_body_blocks` across page breaks
+so multi-page tables format consistently. It resets to `None` at each new chunk.
 
 **Chunk fields stored in the DB:**
 
