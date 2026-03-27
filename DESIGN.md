@@ -50,7 +50,7 @@ number) are skipped.
 | `section` | `17.3.2.27` | |
 | `local_name` | `rPr` | |
 | `title` | `Run Properties` | |
-| `ml_type` | `WordprocessingML` | derived from chapter number; refined by subsection for ch.21 and ch.22 sub-namespaces |
+| `ml_type` | `WordprocessingML` | derived from section number via `CHAPTER_MAP` / `SUBSECTION_MAP` in `_prefix_map.py` |
 | `prefixes` | `w:` | comma-separated for shared elements |
 | `source_part` | `1` | which PDF part |
 | `body` | *(full section text)* | used for FTS |
@@ -60,6 +60,39 @@ separate chunks with different `section` and `ml_type`.
 
 Part 4 (Transitional) elements are tagged `source_part=4` and `ml_type="Transitional"` to
 distinguish them from normative Part 1 entries.
+
+---
+
+## Namespace / prefix mapping
+
+`_prefix_map.py` contains three declarative structures that drive namespace resolution
+across both the PDF chunker and the XSD schema builder:
+
+- **`PREFIX_MAP`** maps namespace prefix → (ml_type, namespace URI). This is the single
+  source of truth for all known prefixes. Derived maps (`ML_TO_PREFIX`, `URI_TO_PREFIX`,
+  `URI_TO_ML`) are computed automatically from it.
+
+- **`CHAPTER_MAP`** maps Part 1 top-level chapter numbers to a default (ml_type, prefix).
+
+- **`SUBSECTION_MAP`** overrides `CHAPTER_MAP` for chapters that contain multiple
+  sub-namespaces. Keyed by `(chapter, subsection)` tuples, e.g. `(20, 4)` for section
+  20.4 (WordprocessingDrawing). The lookup function `section_to_ml` checks `SUBSECTION_MAP`
+  first, then falls back to `CHAPTER_MAP`.
+
+DrawingML sub-namespaces (`wp`, `xdr`, `cdr`, `pic`, `lc`) each have their own
+`PREFIX_MAP` entry so that prefixed queries like `wp:anchor` resolve correctly and
+schema tables use the right ml_type.
+
+### The `pic` edge case
+
+The `pic:` namespace (`dml-picture.xsd`, 6 elements) has no dedicated chapter section
+in the spec PDF. Its elements are documented inline within sections 20.1, 20.2, and 20.5,
+so their chunks get tagged with the containing section's ml_type (`DrawingML`,
+`DrawingML Chart Drawing`, etc.) rather than `DrawingML Picture`. Meanwhile, the schema
+tables derive ml_type from the XSD's target namespace URI, which maps to
+`DrawingML Picture`. This means a prefixed query like `pic:blipFill` returns no results
+because both query stages filter on ml_type and no chunks carry `DrawingML Picture`.
+Unprefixed queries (e.g. just `blipFill`) work fine and return all contexts.
 
 ---
 

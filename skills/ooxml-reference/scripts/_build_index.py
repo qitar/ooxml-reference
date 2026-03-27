@@ -14,7 +14,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from _prefix_map import chapter_to_ml
+from _prefix_map import section_to_ml
 
 PDFS = {
     1: "ECMA-376 OOXML (1) Fundamentals And Markup Language Reference.pdf",
@@ -58,28 +58,6 @@ def extract_pdf(pdf_path: Path, txt_path: Path):
             f"pdftotext failed on {pdf_path} (exit {result.returncode}):\n"
             f"{result.stderr.decode(errors='replace')}"
         )
-
-
-def refine_ml_and_prefix(
-    section: str, default_ml: str, default_prefix: str | None
-) -> tuple[str, str | None]:
-    """
-    Some chapters cover multiple sub-namespaces. Narrow both ml_type and prefix
-    based on the subsection number so they match PREFIX_MAP exactly.
-    """
-    # Chapter 21: DrawingML sub-namespaces
-    if section.startswith("21.2") or section.startswith("21.3"):
-        return "DrawingML Charts", "c:"
-    if section.startswith("21.4"):
-        return "DrawingML Diagrams", "dgm:"
-    # Chapter 22: Shared sub-namespaces
-    if section.startswith("22.1"):
-        return "Math", "m:"
-    if section.startswith("22.8"):
-        return "Relationships", "r:"
-
-    prefix = f"{default_prefix}:" if default_prefix else None
-    return default_ml, prefix
 
 
 def strip_page_margins(text: str, header_lines: int = 1, footer_lines: int = 1) -> str:
@@ -137,18 +115,8 @@ def parse_chunks(txt_path: Path, source_part: int):
         if len(body.strip()) < 50:
             return None
 
-        chapter = int(current_section.split(".")[0])
-        ml_type, raw_prefix = chapter_to_ml(chapter, source_part)
-
-        # Refine ml_type and prefix for chapters with sub-namespaces
-        if source_part == 1:
-            ml_type, prefixes = refine_ml_and_prefix(
-                current_section, ml_type, raw_prefix
-            )
-        elif source_part == 3:
-            prefixes = "mc:"
-        else:
-            prefixes = f"{raw_prefix}:" if raw_prefix else None
+        ml_type, prefix = section_to_ml(current_section, source_part)
+        prefixes = f"{prefix}:" if prefix else None
 
         return {
             "section": current_section,
