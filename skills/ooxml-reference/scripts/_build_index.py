@@ -11,8 +11,6 @@ import re
 import shutil
 import sqlite3
 import subprocess
-import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -24,10 +22,9 @@ PDFS = {
     3: "ECMA-376 OOXML (3) Markup Compatibility and Extensibility.pdf",
     4: "ECMA-376 OOXML (4) Transitional Migration Features.pdf",
 }
-PDF_PAGE_COUNTS = {1: 5039, 2: 95, 3: 43, 4: 1553}
 
-PDF_DIR = Path(__file__).parent.parent / "pdfs"
 DB_PATH = Path(__file__).parent / "index.db"
+PDF_DIR = Path(__file__).parent.parent / "pdfs"
 TMP_DIR = Path(__file__).parent / "tmp"
 
 # Matches lines like: "17.3.2.27    rPr (Run Properties)"
@@ -48,25 +45,19 @@ TOC_BODY_RE = re.compile(r"[\s.·\-–—]*\d*[\s.·\-–—]*")
 
 def check_pdftotext():
     if not shutil.which("pdftotext"):
-        print("Error: pdftotext not found. Install it with: brew install poppler")
-        sys.exit(1)
+        raise RuntimeError("pdftotext not found. Install it with: brew install poppler")
 
 
-def extract_pdf(pdf_path: Path, txt_path: Path, part: int):
-    page_count = PDF_PAGE_COUNTS.get(part, "?")
-    print(f"  Extracting Part {part} ({page_count} pages)...", end=" ", flush=True)
-    t0 = time.time()
+def extract_pdf(pdf_path: Path, txt_path: Path):
     result = subprocess.run(
         ["pdftotext", "-layout", str(pdf_path), str(txt_path)],
         capture_output=True,
     )
-    elapsed = int(time.time() - t0)
     if result.returncode != 0:
-        print(f"FAILED (exit {result.returncode})")
-        print(result.stderr.decode(errors="replace"))
-        return False
-    print(f"done in {elapsed}s")
-    return True
+        raise RuntimeError(
+            f"pdftotext failed on {pdf_path} (exit {result.returncode}):\n"
+            f"{result.stderr.decode(errors='replace')}"
+        )
 
 
 def refine_ml_and_prefix(
@@ -192,8 +183,11 @@ def parse_chunks(txt_path: Path, source_part: int):
         yield chunk
 
 
-def init_db(conn: sqlite3.Connection):
+def init_db(path: Path):
+    conn = sqlite3.connect(path)
+
     conn.executescript("""
+        DROP TABLE IF EXISTS chunks;
         CREATE TABLE chunks (
             id          INTEGER PRIMARY KEY,
             section     TEXT,
@@ -205,6 +199,7 @@ def init_db(conn: sqlite3.Connection):
             body        TEXT
         );
 
+        DROP TABLE IF EXISTS chunks_fts;
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             local_name,
             title,
@@ -214,6 +209,8 @@ def init_db(conn: sqlite3.Connection):
         );
     """)
     conn.commit()
+
+    return conn
 
 
 def insert_chunks(conn: sqlite3.Connection, chunks):
@@ -235,62 +232,52 @@ def populate_fts(conn: sqlite3.Connection):
     conn.commit()
 
 
-def print_summary(counts: dict):
-    print("\nIndexing complete:")
-    total = 0
-    for part in sorted(counts):
-        for ml_type, count in sorted(counts[part].items()):
-            label = f"Part {part} — {ml_type}:"
-            print(f"  {label:<40} {count} chunks")
-            total += count
-    print(f"  {'Total:':<40} {total} chunks")
-
-
 def main():
-    check_pdftotext()
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        check_pdftotext()
 
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-        print(f"Dropped existing index at {DB_PATH}")
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    parts_to_index = [1, 2, 3, 4]
-    total_parts = len(parts_to_index)
+        conn = init_db(DB_PATH)
 
-    conn = sqlite3.connect(DB_PATH)
-    init_db(conn)
+        counts = defaultdict(lambda: defaultdict(int))
+        all_chunks = []
 
-    counts = defaultdict(lambda: defaultdict(int))
-    all_chunks = []
+        for i, (part, path) in enumerate(PDFS.items()):
+            pdf_path = PDF_DIR / path
+            txt_path = TMP_DIR / f"part{part}.txt"
 
-    for i, part in enumerate(parts_to_index, 1):
-        pdf_path = PDF_DIR / PDFS[part]
-        txt_path = TMP_DIR / f"part{part}.txt"
+            print(f"[Part {part}/{len(PDFS)}] ", end="")
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"Part {part} PDF not found at {pdf_path}")
 
-        print(f"[{i}/{total_parts}] ", end="")
+            print("Extracting text... ", end="", flush=True)
+            extract_pdf(pdf_path, txt_path)
+            print("done")
 
-        if not pdf_path.exists():
-            print(f"Warning: Part {part} PDF not found at {pdf_path}, skipping.")
-            continue
+            print("           Parsing text...    ", end="", flush=True)
+            part_chunks = list(parse_chunks(txt_path, part))
+            print(f"done ({len(part_chunks)} chunks)")
 
-        if not extract_pdf(pdf_path, txt_path, part):
-            continue
+            for chunk in part_chunks:
+                counts[part][chunk["ml_type"]] += 1
 
-        print(f"  Parsing Part {part}...", end=" ", flush=True)
-        t0 = time.time()
-        part_chunks = list(parse_chunks(txt_path, part))
-        elapsed = int(time.time() - t0)
-        print(f"done in {elapsed}s ({len(part_chunks)} chunks)")
+            all_chunks.extend(part_chunks)
 
-        for chunk in part_chunks:
-            counts[part][chunk["ml_type"]] += 1
-        all_chunks.extend(part_chunks)
+        print(f"\nInserting {len(all_chunks)} chunks into database... ", end="", flush=True)
+        insert_chunks(conn, all_chunks)
+        populate_fts(conn)
+        print("done")
 
-    print(f"\nInserting {len(all_chunks)} chunks into database...", end=" ", flush=True)
-    t0 = time.time()
-    insert_chunks(conn, all_chunks)
-    populate_fts(conn)
-    conn.close()
-    print(f"done in {int(time.time() - t0)}s")
+        conn.close()
 
-    print_summary(counts)
+        print("\nPDF indexing complete:")
+        total = 0
+        for part in sorted(counts):
+            for ml_type, count in sorted(counts[part].items()):
+                label = f"Part {part} - {ml_type}"
+                print(f"  {label:<40} {count} chunks")
+                total += count
+        print(f"  {'Total':<40} {total} chunks")
+    finally:
+        shutil.rmtree(TMP_DIR, ignore_errors=True)

@@ -15,6 +15,14 @@ ECMA-376 5th Edition (2016).
 | Part 3 — Markup Compatibility & Extensibility | 43 | `mc:` (Markup Compatibility) namespace, fallback handling |
 | Part 4 — Transitional Migration Features | 1553 | Legacy/transitional elements |
 
+## Updating source PDFs and XSDs
+
+Grab the latest version at https://ecma-international.org/publications-and-standards/standards/ecma-376/ .
+
+Transitional XSD Schema files are included in the Part 4 zip file.
+
+The build script will likely have to be revised to accomodate formatting changes in the PDFs.
+
 ## Building index.db
 
 From the `skills/ooxml-reference/scripts/` directory:

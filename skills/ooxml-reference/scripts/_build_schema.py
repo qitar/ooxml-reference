@@ -5,7 +5,6 @@ Writes to tables in index.db: schema_parents and schema_children.
 """
 
 import sqlite3
-import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
@@ -177,11 +176,7 @@ def parse_xsd_file(
       type_registry:  (ct_name, ml_type) → content model node
       group_registry: (group_name, ml_type) → content model node
     """
-    try:
-        tree = ET.parse(xsd_path)
-    except ET.ParseError as e:
-        print(f"  Warning: failed to parse {xsd_path.name}: {e}", file=sys.stderr)
-        return
+    tree = ET.parse(xsd_path)
 
     root = tree.getroot()
 
@@ -211,8 +206,6 @@ def parse_xsd_file(
 
 
 def fmt_occurs(min_o: int, max_o: str) -> str:
-    if min_o == 1 and max_o == "1":
-        return ""  # required exactly once: no annotation needed
     max_s = "*" if max_o == "unbounded" else max_o
     return f" [{min_o}..{max_s}]"
 
@@ -244,7 +237,7 @@ def render_node(
     elif kind == "group_ref":
         gname = node["name"]
         if gname in seen_groups:
-            return f"{pad}(group {gname} — recursive)"
+            return f"{pad}(group {gname} - recursive)"  # Does not actually occur in current XSDs
         group_node = all_groups.get(gname)
         if group_node is None:
             occ = fmt_occurs(node["min"], node["max"])
@@ -291,18 +284,109 @@ def collect_element_names(
     return names
 
 
+def prefixed_name(name: str, ml: str) -> str:
+    """Prepend the canonical namespace prefix for an ML type to an element name."""
+    pfx = ML_TO_PREFIX.get(ml, "")
+    return f"{pfx}:{name}" if pfx else name
+
+
+def build_children_data(
+    elem_registry: dict,
+    type_registry: dict,
+    all_groups: dict,
+    name_to_mls: dict[str, set[str]],
+) -> dict:
+    """For each element, render its content model as human-readable text."""
+    children_data: dict = {}
+    for (elem_name, ml_type), ct_name in elem_registry.items():
+        model = type_registry.get((ct_name, ml_type))
+        if model is None:
+            continue
+        rendered = render_node(model, all_groups, prefix_fn=make_prefix_fn(ml_type, name_to_mls))
+        if rendered:
+            children_data[(elem_name, ml_type)] = rendered
+    return children_data
+
+
+def build_parents_data(
+    elem_registry: dict,
+    type_registry: dict,
+    all_groups: dict,
+) -> dict:
+    """For each element, find all parent elements that can contain it."""
+    # For each CT, find all element names that can appear in it
+    ct_to_child_names: dict = {}
+    for (ct_name, ml_type), model in type_registry.items():
+        names = collect_element_names(model, all_groups)
+        if names:
+            ct_to_child_names[(ct_name, ml_type)] = names
+
+    # Invert: child element name → set of (ct_name, ml_type) that contain it
+    child_name_to_cts: dict = defaultdict(set)
+    for (ct_name, ml_type), names in ct_to_child_names.items():
+        for name in names:
+            child_name_to_cts[name].add((ct_name, ml_type))
+
+    # Invert elem_registry: (ct_name, ml_type) → set of (elem_name, ml_type) pairs
+    ct_key_to_elems: dict[tuple, set[tuple[str, str]]] = defaultdict(set)
+    for (elem_name, ml_type), ct_name in elem_registry.items():
+        ct_key_to_elems[(ct_name, ml_type)].add((elem_name, ml_type))
+
+    parents_data: dict = {}
+    for (elem_name, ml_type) in elem_registry:
+        parent_entries: set[tuple[str, str]] = set()
+        for ct_key in child_name_to_cts.get(elem_name, set()):
+            parent_entries |= ct_key_to_elems.get(ct_key, set())
+        if parent_entries:
+            parents_data[(elem_name, ml_type)] = sorted(
+                prefixed_name(n, mt) for n, mt in parent_entries
+            )
+    return parents_data
+
+
+def make_prefix_fn(default_ml: str, name_to_mls: dict[str, set[str]]):
+    """Return a function that prepends the namespace prefix to an element name."""
+    default_pfx = ML_TO_PREFIX.get(default_ml, "")
+
+    def prefix_fn(name: str) -> str:
+        mls = name_to_mls.get(name, set())
+        # Cross-namespace ref: element belongs to a different ML type
+        if mls and default_ml not in mls:
+            pfx = ML_TO_PREFIX.get(next(iter(mls)), "")
+        else:
+            pfx = default_pfx
+        return f"{pfx}:{name}" if pfx else name
+
+    return prefix_fn
+
+
+def init_db(path: Path):
+    conn = sqlite3.connect(path)
+
+    conn.executescript("""
+        DROP TABLE IF EXISTS schema_parents;
+        CREATE TABLE schema_parents (
+            local_name  TEXT NOT NULL,
+            ml_type     TEXT NOT NULL,
+            parents     TEXT NOT NULL,
+            PRIMARY KEY (local_name, ml_type)
+        );
+
+        DROP TABLE IF EXISTS schema_children;
+        CREATE TABLE schema_children (
+            local_name     TEXT NOT NULL,
+            ml_type        TEXT NOT NULL,
+            content_model  TEXT NOT NULL,
+            PRIMARY KEY (local_name, ml_type)
+        );
+    """)
+
+    return conn
+
+
 def main() -> None:
     if not SCHEMA_DIR.exists():
-        print(f"Error: schema directory not found: {SCHEMA_DIR}", file=sys.stderr)
-        sys.exit(1)
-
-    if not DB_PATH.exists():
-        print(
-            f"Error: index.db not found at {DB_PATH}\n"
-            "Run build.py first to create the database.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        raise FileNotFoundError(f"Schema directory not found: {SCHEMA_DIR}")
 
     # Registries populated by parsing
     elem_registry: dict = {}   # (local_name, ml_type) → ct_name
@@ -330,89 +414,16 @@ def main() -> None:
     for (name, mt) in elem_registry:
         name_to_mls[name].add(mt)
 
-    def make_prefix_fn(default_ml: str):
-        """Return a function that prepends the namespace prefix to an element name."""
-        default_pfx = ML_TO_PREFIX.get(default_ml, "")
+    print("Building children data... ", end="", flush=True)
+    children_data = build_children_data(elem_registry, type_registry, all_groups, name_to_mls)
+    print("done")
 
-        def prefix_fn(name: str) -> str:
-            mls = name_to_mls.get(name, set())
-            if default_ml in mls:
-                pfx = default_pfx
-            elif mls:
-                pfx = ML_TO_PREFIX.get(next(iter(mls)), "")
-            else:
-                pfx = default_pfx
-            return f"{pfx}:{name}" if pfx else name
+    print("Building parent data... ", end="", flush=True)
+    parents_data = build_parents_data(elem_registry, type_registry, all_groups)
+    print("done")
 
-        return prefix_fn
-
-    # ── Children ──────────────────────────────────────────────────────────────
-    print("Building children data...")
-    children_data: dict = {}  # (local_name, ml_type) → rendered content model
-    for (elem_name, ml_type), ct_name in elem_registry.items():
-        model = type_registry.get((ct_name, ml_type))
-        if model is None:
-            continue
-        rendered = render_node(model, all_groups, prefix_fn=make_prefix_fn(ml_type))
-        if rendered:
-            children_data[(elem_name, ml_type)] = rendered
-
-    # ── Parents ───────────────────────────────────────────────────────────────
-    print("Building parent data...")
-
-    # For each CT, find all element names that can appear in it
-    ct_to_child_names: dict = {}
-    for (ct_name, ml_type), model in type_registry.items():
-        names = collect_element_names(model, all_groups)
-        if names:
-            ct_to_child_names[(ct_name, ml_type)] = names
-
-    # Invert: child element name → set of (ct_name, ml_type) that contain it
-    child_name_to_cts: dict = defaultdict(set)
-    for (ct_name, ml_type), names in ct_to_child_names.items():
-        for name in names:
-            child_name_to_cts[name].add((ct_name, ml_type))
-
-    # Invert elem_registry: (ct_name, ml_type) → set of (elem_name, ml_type) pairs
-    ct_key_to_elems: dict[tuple, set[tuple[str, str]]] = defaultdict(set)
-    for (elem_name, ml_type), ct_name in elem_registry.items():
-        ct_key_to_elems[(ct_name, ml_type)].add((elem_name, ml_type))
-
-    def prefixed_name(name: str, ml: str) -> str:
-        pfx = ML_TO_PREFIX.get(ml, "")
-        return f"{pfx}:{name}" if pfx else name
-
-    # For each element, collect all parent elements with their ml_type for prefixing
-    parents_data: dict = {}  # (elem_name, ml_type) → sorted list of prefixed parent names
-    for (elem_name, ml_type) in elem_registry:
-        parent_entries: set[tuple[str, str]] = set()
-        for ct_key in child_name_to_cts.get(elem_name, set()):
-            parent_entries |= ct_key_to_elems.get(ct_key, set())
-        if parent_entries:
-            parents_data[(elem_name, ml_type)] = sorted(
-                prefixed_name(n, mt) for n, mt in parent_entries
-            )
-
-    # ── Write to DB ───────────────────────────────────────────────────────────
-    print("Writing schema tables to index.db...")
-    conn = sqlite3.connect(DB_PATH)
-    conn.executescript("""
-        DROP TABLE IF EXISTS schema_parents;
-        DROP TABLE IF EXISTS schema_children;
-        CREATE TABLE schema_parents (
-            local_name  TEXT NOT NULL,
-            ml_type     TEXT NOT NULL,
-            parents     TEXT NOT NULL,
-            PRIMARY KEY (local_name, ml_type)
-        );
-        CREATE TABLE schema_children (
-            local_name     TEXT NOT NULL,
-            ml_type        TEXT NOT NULL,
-            content_model  TEXT NOT NULL,
-            PRIMARY KEY (local_name, ml_type)
-        );
-    """)
-
+    print("Writing tables to index.db... ", end="", flush=True)
+    conn = init_db(DB_PATH)
     conn.executemany(
         "INSERT INTO schema_parents VALUES (?, ?, ?)",
         [(k[0], k[1], ", ".join(v)) for k, v in parents_data.items()],
@@ -423,18 +434,14 @@ def main() -> None:
     )
     conn.commit()
     conn.close()
+    print("done")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     from collections import Counter
 
     print("\nSchema index complete.")
-    print(f"  Elements with children info: {len(children_data)}")
-    print(f"  Elements with parents info:  {len(parents_data)}")
-    print()
-
     ml_child_counts = Counter(ml for (_, ml) in children_data)
     ml_parent_counts = Counter(ml for (_, ml) in parents_data)
-    print(f"{'ML type':<35} {'Children':>10} {'Parents':>10}")
-    print("-" * 57)
     for ml in sorted(ml_child_counts):
-        print(f"{ml:<35} {ml_child_counts[ml]:>10} {ml_parent_counts.get(ml, 0):>10}")
+        c = ml_child_counts[ml]
+        p = ml_parent_counts.get(ml, 0)
+        print(f"{ml:<30} {c:>5} children {p:>5} parents")
