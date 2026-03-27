@@ -8,11 +8,11 @@ Updates to the spec will likely require an entirely new parsing logic.
 """
 
 import re
-import shutil
 import sqlite3
-import subprocess
 from collections import defaultdict
 from pathlib import Path
+
+import fitz  # type: ignore
 
 from _prefix_map import section_to_ml
 
@@ -25,102 +25,141 @@ PDFS = {
 
 DB_PATH = Path(__file__).parent / "index.db"
 PDF_DIR = Path(__file__).parent.parent / "pdfs"
-TMP_DIR = Path(__file__).parent / "tmp"
 
-# Matches lines like: "17.3.2.27    rPr (Run Properties)"
-# Group 1: section number, Group 2: heading text, Group 3: parenthesized title (optional)
-# Requires chapter >= 1 to avoid matching body-text decimals like "0.25 inches".
-# Components are capped at 3 digits each to reject numbers like "1234.59" or "3.78624"
-# that appear in body text (e.g. measurements, format examples).
-HEADING_RE = re.compile(
-    r"^\s*([1-9]\d{0,2}(?:\.\d{1,3})+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
+# All section headings use Cambria (regular or Bold) at >= 12pt, while body text
+# uses Calibri 11pt and code uses Consolas 10-11pt.
+HEADING_MIN_SIZE = 12.0
+
+# Page headers (running titles) and footers (page numbers) sit at fixed y-positions.
+# These thresholds (in points) exclude them from content extraction.
+MARGIN_TOP = 70
+MARGIN_BOTTOM = 730
+
+# Applied only to text already confirmed as heading-font. Extracts section number,
+# element name, and parenthesized title. No anti-false-positive guards needed here
+# since font metadata has already confirmed it's a real heading.
+SECTION_RE = re.compile(
+    r"^\s*(\d+(?:\.\d+)+)\s+(\S.*?)(?:\s*\((.+?)\))?\s*$"
 )
 
-# TOC heading lines have dotted leaders followed by a page number at the end.
-# These match HEADING_RE but should not start a new chunk — they're navigation
-# artifacts that would create duplicate chunks alongside the real content pages.
-TOC_HEADING_RE = re.compile(r"\.{3,}\s*\d+\s*$")
 
-# TOC entries have no real body — just dotted leaders and a page number
-TOC_BODY_RE = re.compile(r"[\s.·\-–—]*\d*[\s.·\-–—]*")
+def is_heading_span(span: dict) -> bool:
+    """True when a span uses Cambria at heading size (>= 12pt)."""
+    return "Cambria" in span["font"] and span["size"] >= HEADING_MIN_SIZE
 
 
-def check_pdftotext():
-    if not shutil.which("pdftotext"):
-        raise RuntimeError("pdftotext not found. Install it with: brew install poppler")
+def is_heading_block(block: dict) -> bool:
+    """True when any line in a text block contains a heading-styled span.
 
-
-def extract_pdf(pdf_path: Path, txt_path: Path):
-    result = subprocess.run(
-        ["pdftotext", "-layout", str(pdf_path), str(txt_path)],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"pdftotext failed on {pdf_path} (exit {result.returncode}):\n"
-            f"{result.stderr.decode(errors='replace')}"
-        )
-
-
-def strip_page_margins(text: str, header_lines: int = 1, footer_lines: int = 1) -> str:
+    Heading blocks often have two lines (section number + title) where the
+    section-number line uses a different style (Cambria-Bold 11pt black).
+    Checking at block level catches these mixed-style headings.
     """
-    Remove running page headers and footers from pdftotext -layout output.
+    for line in block["lines"]:
+        if line["spans"] and is_heading_span(line["spans"][0]):
+            return True
+    return False
 
-    pdftotext delimits pages with form-feed characters. Headers and footers
-    sit at fixed positions at the top and bottom of each page, so slicing
-    a fixed number of non-blank lines from each end reliably removes them
-    without brittle pattern matching.
+
+def _spans_to_text(spans: list[dict]) -> str:
+    """Join spans into text, inserting spaces to preserve column gaps.
+
+    pymupdf spans carry bbox coordinates. When two consecutive spans are
+    separated by a gap wider than a few normal characters, the original PDF
+    had a column or table boundary there. We approximate the gap with spaces
+    so that attribute tables remain readable in plain text.
     """
-    pages = text.split("\f")
-    stripped = []
-    for page in pages:
-        page_lines = page.splitlines()
-        # Collect indices of non-blank lines so we skip blank padding
-        non_blank = [i for i, ln in enumerate(page_lines) if ln.strip()]
-        if len(non_blank) <= header_lines + footer_lines:
-            # Page has too few real lines to strip — keep as-is so we don't
-            # accidentally discard a real content page with a short section.
-            stripped.append(page)
-            continue
-        drop_top = set(non_blank[:header_lines])
-        drop_bot = set(non_blank[-footer_lines:])
-        kept = [ln for i, ln in enumerate(page_lines) if i not in drop_top and i not in drop_bot]
-        stripped.append("\n".join(kept))
-    return "\f".join(stripped)
+    if not spans:
+        return ""
+
+    parts = [spans[0]["text"]]
+    for prev, cur in zip(spans, spans[1:]):
+        gap = cur["bbox"][0] - prev["bbox"][2]
+        char_w = cur["size"] * 0.5
+        if char_w > 0 and gap > char_w * 3:
+            n_spaces = max(2, round(gap / char_w))
+            parts.append(" " * n_spaces)
+        parts.append(cur["text"])
+
+    return "".join(parts)
 
 
-def parse_chunks(txt_path: Path, source_part: int):
+def merge_block_lines(blocks: list[dict]) -> list[str]:
+    """Merge lines across multiple pymupdf blocks, preserving column layout.
+
+    PDF attribute tables often place the name cell and description cell in
+    separate blocks that overlap vertically (same y-position, different x).
+    pymupdf can also split side-by-side cells into separate "lines" within
+    one block. We collect all lines from the given blocks, group them by
+    vertical position, then merge same-row spans with gap-aware spacing.
+    """
+    all_lines = []
+    for block in blocks:
+        for line in block["lines"]:
+            if line["spans"]:
+                all_lines.append(line)
+
+    if not all_lines:
+        return []
+
+    # Sort by vertical midpoint so lines from different blocks interleave correctly
+    all_lines.sort(key=lambda line: (line["bbox"][1] + line["bbox"][3]) / 2)
+
+    def y_mid(line: dict) -> float:
+        return (line["bbox"][1] + line["bbox"][3]) / 2
+
+    # Group lines whose vertical midpoints are within half a line-height
+    rows: list[list[dict]] = []
+    for line in all_lines:
+        if rows:
+            last_row = rows[-1]
+            ref_mid = y_mid(last_row[0])
+            height = last_row[0]["bbox"][3] - last_row[0]["bbox"][1]
+            if abs(y_mid(line) - ref_mid) < max(height * 0.5, 3.0):
+                last_row.append(line)
+                continue
+        rows.append([line])
+
+    result = []
+    for row in rows:
+        all_spans = []
+        for line in row:
+            all_spans.extend(line["spans"])
+        all_spans.sort(key=lambda s: s["bbox"][0])
+        result.append(_spans_to_text(all_spans))
+
+    return result
+
+
+def line_text(line: dict) -> str:
+    """Join all span texts in a pymupdf line dict."""
+    return _spans_to_text(line["spans"])
+
+
+def parse_chunks(pdf_path: Path, source_part: int):
     """
     Yield dicts with keys: section, local_name, title, ml_type, prefixes, source_part, body.
 
-    Chunks that are TOC entries or too short are silently dropped.
+    Uses pymupdf font metadata to detect section headings instead of regex on
+    plain text. Chunks with too little body content or unmapped ml_type are dropped.
     """
-    text = txt_path.read_text(encoding="utf-8", errors="replace")
-    text = strip_page_margins(text)
-    lines = text.splitlines()
+    doc = fitz.open(pdf_path)
 
     current_section = None
     current_local_name = None
     current_title = None
-    body_lines = []
+    body_lines: list[str] = []
 
     def flush_chunk():
         if current_section is None:
             return None
         body = "\n".join(body_lines).strip()
 
-        # Drop TOC entries: body is blank or only dots/dashes/page-number
-        if not body or TOC_BODY_RE.fullmatch(body.strip()):
-            return None
-
-        # Drop sections with too little content to be useful
-        if len(body.strip()) < 50:
+        if len(body) < 50:
             return None
 
         ml_type, prefix = section_to_ml(current_section, source_part)
 
-        # Unmapped chapters produce "Unknown" and are always false-positive
-        # heading matches from body text (e.g. "1.5 inches", "44.398 ml").
         if ml_type == "Unknown":
             return None
 
@@ -136,32 +175,67 @@ def parse_chunks(txt_path: Path, source_part: int):
             "body": body,
         }
 
-    for line in lines:
-        m = HEADING_RE.match(line)
-        if m and not TOC_HEADING_RE.search(line):
-            chunk = flush_chunk()
-            if chunk:
-                yield chunk
+    for page in doc:
+        blocks = page.get_text("dict")["blocks"]
 
-            current_section = m.group(1)
-            # group(2) is an element name only when group(3) supplies a
-            # parenthesized title.  Otherwise group(2) is the section name
-            # itself (e.g. "WordprocessingML") and belongs in title.
-            if m.group(3):
-                current_local_name = m.group(2).strip()
-                current_title = m.group(3).strip()
+        # Batch consecutive non-heading blocks so cross-block table cells
+        # (attribute name in one block, description in another at the same y)
+        # get their lines merged into proper rows.
+        pending_body_blocks: list[dict] = []
+
+        def flush_body_blocks():
+            if pending_body_blocks:
+                body_lines.extend(merge_block_lines(pending_body_blocks))
+                pending_body_blocks.clear()
+
+        for block in blocks:
+            if block["type"] != 0:
+                continue
+
+            y0 = block["bbox"][1]
+            if y0 < MARGIN_TOP or y0 > MARGIN_BOTTOM:
+                continue
+
+            if is_heading_block(block):
+                flush_body_blocks()
+
+                heading_parts = [
+                    line_text(line).strip()
+                    for line in block["lines"]
+                    if line["spans"]
+                ]
+                heading_text = " ".join(heading_parts)
+                m = SECTION_RE.match(heading_text)
+                if m:
+                    chunk = flush_chunk()
+                    if chunk:
+                        yield chunk
+
+                    current_section = m.group(1)
+                    if m.group(3):
+                        current_local_name = m.group(2).strip()
+                        current_title = m.group(3).strip()
+                    else:
+                        current_local_name = None
+                        current_title = m.group(2).strip()
+
+                    # Include the heading text in body for self-contained context
+                    body_lines = [heading_text]
+                else:
+                    # Heading-styled block without a section number (e.g. "Foreword")
+                    for part in heading_parts:
+                        body_lines.append(part)
             else:
-                current_local_name = None
-                current_title = m.group(2).strip()
-            # The heading line itself is part of the body so context is self-contained
-            body_lines = [line]
-        elif current_section is not None:
-            body_lines.append(line)
+                pending_body_blocks.append(block)
+
+        flush_body_blocks()
 
     # Flush the final chunk
     chunk = flush_chunk()
     if chunk:
         yield chunk
+
+    doc.close()
 
 
 def init_db(path: Path):
@@ -214,51 +288,39 @@ def populate_fts(conn: sqlite3.Connection):
 
 
 def main():
-    try:
-        check_pdftotext()
+    conn = init_db(DB_PATH)
 
-        TMP_DIR.mkdir(parents=True, exist_ok=True)
+    counts = defaultdict(lambda: defaultdict(int))
+    all_chunks = []
 
-        conn = init_db(DB_PATH)
+    for part, path in PDFS.items():
+        pdf_path = PDF_DIR / path
 
-        counts = defaultdict(lambda: defaultdict(int))
-        all_chunks = []
+        print(f"[Part {part}/{len(PDFS)}] ", end="")
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"Part {part} PDF not found at {pdf_path}")
 
-        for i, (part, path) in enumerate(PDFS.items()):
-            pdf_path = PDF_DIR / path
-            txt_path = TMP_DIR / f"part{part}.txt"
+        print("Parsing... ", end="", flush=True)
+        part_chunks = list(parse_chunks(pdf_path, part))
+        print(f"done ({len(part_chunks)} chunks)")
 
-            print(f"[Part {part}/{len(PDFS)}] ", end="")
-            if not pdf_path.exists():
-                raise FileNotFoundError(f"Part {part} PDF not found at {pdf_path}")
+        for chunk in part_chunks:
+            counts[part][chunk["ml_type"]] += 1
 
-            print("Extracting text... ", end="", flush=True)
-            extract_pdf(pdf_path, txt_path)
-            print("done")
+        all_chunks.extend(part_chunks)
 
-            print("           Parsing text...    ", end="", flush=True)
-            part_chunks = list(parse_chunks(txt_path, part))
-            print(f"done ({len(part_chunks)} chunks)")
+    print(f"\nInserting {len(all_chunks)} chunks into database... ", end="", flush=True)
+    insert_chunks(conn, all_chunks)
+    populate_fts(conn)
+    print("done")
 
-            for chunk in part_chunks:
-                counts[part][chunk["ml_type"]] += 1
+    conn.close()
 
-            all_chunks.extend(part_chunks)
-
-        print(f"\nInserting {len(all_chunks)} chunks into database... ", end="", flush=True)
-        insert_chunks(conn, all_chunks)
-        populate_fts(conn)
-        print("done")
-
-        conn.close()
-
-        print("\nPDF indexing complete:")
-        total = 0
-        for part in sorted(counts):
-            for ml_type, count in sorted(counts[part].items()):
-                label = f"Part {part} - {ml_type}"
-                print(f"  {label:<40} {count} chunks")
-                total += count
-        print(f"  {'Total':<40} {total} chunks")
-    finally:
-        shutil.rmtree(TMP_DIR, ignore_errors=True)
+    print("\nPDF indexing complete:")
+    total = 0
+    for part in sorted(counts):
+        for ml_type, count in sorted(counts[part].items()):
+            label = f"Part {part} - {ml_type}"
+            print(f"  {label:<40} {count} chunks")
+            total += count
+    print(f"  {'Total':<40} {total} chunks")

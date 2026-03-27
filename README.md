@@ -40,13 +40,13 @@ The build script will likely have to be revised to accomodate formatting changes
 From the `skills/ooxml-reference/scripts/` directory:
 
 ```bash
-python build.py
+uv run --with pymupdf python build.py
 ```
 
 The index is stored in `skills/ooxml-reference/scripts/index.db`.
 
 ## Build-time dependencies
 
-| Package  | Install command        | Purpose                           |
-|----------|------------------------|-----------------------------------|
-| poppler  | `brew install poppler` | PDF text extraction (`pdftotext`) |
+| Package  | Install command                        | Purpose                              |
+|----------|----------------------------------------|--------------------------------------|
+| PyMuPDF  | `uv run --with pymupdf` or `pip install pymupdf` | PDF parsing with font metadata |

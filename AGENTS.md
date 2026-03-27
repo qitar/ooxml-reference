@@ -39,7 +39,7 @@ the stage-1 exact match filters on ml_type.
 Run from `skills/ooxml-reference/scripts/`:
 
 ```bash
-python build.py    # requires pdftotext (brew install poppler)
+uv run --with pymupdf python build.py
 ```
 
 The index must be rebuilt after any change to `_build_index.py`, `_prefix_map.py`, or `_build_schema.py`.

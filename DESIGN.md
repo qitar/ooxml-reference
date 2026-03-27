@@ -19,10 +19,13 @@ skills/ooxml-reference/
 
 ## PDF text extraction
 
-**Tool:** `pdftotext -layout <file.pdf> <output.txt>`
+**Tool:** pymupdf (`fitz`) — extracts text with per-span font metadata (name, size, color).
 
-The `-layout` flag preserves whitespace, which helps distinguish section headings (flush-left with
-a section number) from body prose and code examples.
+Each page is processed via `page.get_text("dict")`, which returns structured blocks/lines/spans.
+Font metadata on each span distinguishes headings from body text without regex heuristics.
+
+**Dependency:** `PyMuPDF` (imported as `fitz`). Not installed globally; invoked via
+`uv run --with pymupdf python build.py`.
 
 ---
 
@@ -30,25 +33,33 @@ a section number) from body prose and code examples.
 
 Each chunk is one spec entry — typically one numbered subsection (e.g. `17.3.2.27 rPr`).
 
-**Section heading pattern:**
-```
-<section_number>  <local_name> (<human_readable_title>)
-```
-Examples:
-- `17.3.2.27    rPr (Run Properties)`
-- `19.2.1.39    sldSz (Presentation Slide Size)`
-- `20.1.2.2.4   cNvCxnSpPr (Non-Visual Connector Shape Drawing Properties)`
+**Section heading detection:** headings are identified by font metadata.
+A text block is a heading block when any line's first span uses font `Cambria*` at
+size >= 12pt. Body text uses `Calibri 11pt` and code examples use `Consolas 10-11pt`,
+so neither triggers heading detection.
 
-**Parsing:** a regex matching `^[1-9]\d{0,2}(?:\.\d{1,3})+\s+...` detects section boundaries.
-Components are capped at 3 digits each so that body-text numbers like `1234.59`, `3.78624`,
-or `4503599627370497.5` (measurements, format examples) are not mistaken for headings. The
-chapter must start at 1 or above to reject decimals like `0.25 inches`. Everything from a
-matched heading line to the next match is one chunk. Chunks that are pure TOC entries (no
-body text, just a page number) are skipped.
+Once a heading block is found, all its lines are joined and parsed with a simple regex
+to extract the section number, element name, and parenthesized title:
+```
+17.3.2.27 rPr (Run Properties)
+19.2.1.39 sldSz (Presentation Slide Size)
+20.1.2.2.4 cNvCxnSpPr (Non-Visual Connector Shape Drawing Properties)
+```
 
-Chunks whose `section_to_ml` resolves to `"Unknown"` are also dropped. Unmapped chapters
-(e.g. chapter 1 intro, chapter 44 number-format appendix) never contain element definitions,
-so any heading match there is a false positive from body text.
+Heading-styled blocks without a dotted section number (e.g. "Foreword", chapter titles)
+are treated as body text. Page headers (y < 70pt) and footers (y > 730pt) are skipped.
+
+Chunks whose `section_to_ml` resolves to `"Unknown"` are dropped, as are chunks with
+fewer than 50 characters of body text.
+
+**Body text assembly:** pymupdf often splits side-by-side table cells (e.g. an
+attribute name column and its description column) into separate blocks that share
+the same y-position. To preserve column layout, consecutive non-heading blocks on
+each page are batched and their lines are merged by vertical position: lines whose
+midpoints are within half a line-height are grouped into a single row. Within each
+row, spans are sorted by x-position and joined with proportional spacing when the
+horizontal gap exceeds ~3 character widths. This keeps attribute tables readable
+in the stored body text.
 
 **Chunk fields stored in the DB:**
 
