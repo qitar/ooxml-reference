@@ -1,8 +1,12 @@
 # ooxml-reference
 
-An AI agent skill for looking up the ECMA-376 (ISO/IEC 29500) OOXML reference.
+A CLI script + an AI agent skill for looking up the ECMA-376 (ISO/IEC 29500) OOXML reference.
+
+OOXML is the XML-based file format behind PowerPoint (.pptx),
+Word (.docx), and Excel (.xlsx) files.
+
 Uses an SQLite index built from ECMA-376 specification PDFs and XSDs
-and a lookup script that the agent can query using element names or description text.
+and a lookup script that agents can query using element names or description text.
 
 ## Source material
 
@@ -14,6 +18,25 @@ ECMA-376 5th Edition (2016).
 | Part 2 — Open Packaging Conventions | 95 | Package/part/relationship structure |
 | Part 3 — Markup Compatibility & Extensibility | 43 | `mc:` (Markup Compatibility) namespace, fallback handling |
 | Part 4 — Transitional Migration Features | 1553 | Legacy/transitional elements |
+
+## Script usage
+
+```
+python scripts/lookup.py "a:rPr"
+python scripts/lookup.py "bold text"
+```
+
+See skills/ooxml-reference/SKILL.md for details.
+
+## Skill usage
+
+```
+npx skills add https://github.com/qitar/ooxml-reference --skill ooxml-reference
+
+claude "How do I change table cell background color to a gradient with OOXML?"
+```
+
+See skills/ooxml-reference/SKILL.md for details.
 
 ## Updating source PDFs and XSDs
 

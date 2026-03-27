@@ -1,17 +1,20 @@
+---
+name: ooxml-reference
+description: "Look up ECMA-376 OOXML spec entries (element definitions, attributes, parent/child relationships, content models) by element name or keyword. Use whenever working with Office Open XML at the XML level: parsing, generating, or debugging .pptx/.xlsx/.docx XML, checking what an element or attribute means, finding allowed children or parents, or resolving prefixed elements like w:rPr, a:solidFill, x:row, p:cSld."
+---
+
 # OOXML Reference Lookup Skill
 
 ## When to use this skill
 
 Use this skill whenever you need authoritative ECMA-376 spec information:
 
-- You encounter an unknown XML element or attribute in a pptx/xlsx diff (e.g. `<a:solidFill>`, `w:rPr`, `p:sldSz`)
-- You need to know which element or attribute produces a specific visual effect (e.g. "how do I set bold text in DrawingML?")
-- The user asks what an OOXML XML node or attribute means or does
-- You are editing raw OOXML and need to know valid attributes, child elements, or constraints
+The the lookup script queries a local sqlite database indexed from the official
+ECMA-376 specification PDFs and XSD schema files.
 
 ## Running the lookup script
 
-Determine the absolute path to this skill's directory (the directory containing this SKILL.md file), then invoke the lookup script relative to it:
+Invoke the lookup script relative to this skill's directory:
 
 ```bash
 python <skill_dir>/scripts/lookup.py "<query>"
@@ -60,10 +63,6 @@ If your keywords do not yield results, try reducing the number of keywords.
 
 Exit codes: 0 = results found, 1 = no results.
 
-## Included source documents
-
-The ECMA-376 5th Edition (2016) specification PDFs and transitional XSD schema files are included in this skill under `pdfs/` and `schemas/` respectively. If the lookup index does not contain enough detail for your task, you may read the PDF or XSD files directly for additional context.
-
 ## Interpreting results
 
 Each result block has this structure:
@@ -98,3 +97,9 @@ Key fields:
 ## Caveats
 
 **Multiple entries for the same element name.** Elements like `rPr` exist in both WordprocessingML and DrawingML with different attributes. Always check the ML type to make sure you are looking at the right spec entry.
+
+## Included source documents
+
+The ECMA-376 5th Edition (2016) specification PDFs and transitional XSD schema files are included in this skill under `pdfs/` and `schemas/` respectively. If the lookup index does not contain enough detail for your task, you may read the PDF or XSD files directly for additional context.
+
+You may also query the sqlite database directly using the `sqlite3` CLI if needed.
